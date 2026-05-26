@@ -1,0 +1,6 @@
+{
+  "name": "Mac Data Hub",
+  "description": "Premium data bundle reseller platform in Ghana offering mobile money checkouts and automated data deliveries.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
