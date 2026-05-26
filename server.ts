@@ -348,13 +348,14 @@ app.get('/api/store/:slug', async (req: Request, res: Response) => {
       };
     });
 
-    return res.json({
+     return res.json({
       reseller: {
         id: reseller.id,
         store_name: reseller.store_name,
         store_slug: reseller.store_slug,
         phone: reseller.phone,
-        email: reseller.email
+        email: reseller.email,
+        storefront_enabled: reseller.storefront_enabled !== false
       },
       bundles: storefrontBundles
     });
@@ -426,8 +427,8 @@ app.post('/api/checkout', async (req: Request, res: Response) => {
     }
 
     const bundle = await db.getBundleById(Number(bundleId));
-    if (!bundle) {
-      return res.status(404).json({ error: 'Selected bundle was not found.' });
+    if (!bundle || bundle.status === 'inactive') {
+      return res.status(404).json({ error: 'Selected bundle is currently unavailable or has been deactivated.' });
     }
 
     // Determine pricing flow
@@ -440,6 +441,11 @@ app.post('/api/checkout', async (req: Request, res: Response) => {
     let targetResellerId = resellerId ? Number(resellerId) : null;
 
     if (targetResellerId) {
+      const resellerUser = await db.getUserById(targetResellerId);
+      if (resellerUser && resellerUser.storefront_enabled === false) {
+        return res.status(400).json({ error: 'This reseller storefront is currently closed and is not accepting new orders.' });
+      }
+
       const customPricings = await db.getResellerPricings(targetResellerId);
       const pr = customPricings.find(p => p.bundle_id === bundle.id);
       
@@ -1017,6 +1023,16 @@ app.put('/api/admin/settings/data-api', verifyToken(['admin']), async (req: Auth
   }
 });
 
+app.put('/api/admin/settings/whatsapp-community', verifyToken(['admin']), async (req: AuthRequest, res: Response) => {
+  try {
+    const { link } = req.body;
+    await db.updateSetting('whatsapp_community_link', String(link || ''));
+    return res.json({ success: true, message: 'WhatsApp reseller community link refreshed successfully.' });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // ==========================================
 // 5. RESELLER PROTECTED CAPABILITIES
 // ==========================================
@@ -1025,9 +1041,11 @@ app.put('/api/admin/settings/data-api', verifyToken(['admin']), async (req: Auth
 app.get('/api/reseller/dashboard', verifyToken(['reseller']), async (req: AuthRequest, res: Response) => {
   try {
     const resellerId = req.user!.id;
+    const user = await db.getUserById(resellerId);
     const account = await db.getResellerAccountByUserId(resellerId) || await db.createResellerAccount(resellerId);
     const orders = await db.getOrders(resellerId);
     const withdrawals = await db.getWithdrawals(resellerId);
+    const settings = await db.getSettings();
 
     // Filter distinct paid customers by matching their emails/phone
     const paidOrders = orders.filter(o => o.payment_status === 'paid');
@@ -1039,9 +1057,25 @@ app.get('/api/reseller/dashboard', verifyToken(['reseller']), async (req: AuthRe
       total_orders_count: orders.length,
       paid_orders_count: paidOrders.length,
       total_customers_acquired: distinctPhones.size,
-      pending_withdrawal_ghs: withdrawals.filter(w => w.status === 'pending').reduce((sum, w) => sum + Number(w.amount_ghs), 0)
+      pending_withdrawal_ghs: withdrawals.filter(w => w.status === 'pending').reduce((sum, w) => sum + Number(w.amount_ghs), 0),
+      storefront_enabled: user ? user.storefront_enabled !== false : true,
+      whatsapp_community_link: settings.whatsapp_community_link || ''
     });
 
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/reseller/storefront-status', verifyToken(['reseller']), async (req: AuthRequest, res: Response) => {
+  try {
+    const resellerId = req.user!.id;
+    const { enabled } = req.body;
+    if (enabled === undefined) {
+      return res.status(400).json({ error: 'Storefront state Boolean is required.' });
+    }
+    await db.updateStorefrontEnabled(resellerId, !!enabled);
+    return res.json({ success: true, message: `Storefront status updated successfully to ${enabled ? 'Open' : 'Closed'}.` });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
@@ -1051,7 +1085,7 @@ app.get('/api/reseller/dashboard', verifyToken(['reseller']), async (req: AuthRe
 app.get('/api/reseller/bundles', verifyToken(['reseller']), async (req: AuthRequest, res: Response) => {
   try {
     const resellerId = req.user!.id;
-    const baseBundles = await db.getBundles();
+    const baseBundles = await db.getBundles(true);
     const pricings = await db.getResellerPricings(resellerId);
 
     const decorated = baseBundles.map(b => {

@@ -251,6 +251,61 @@ export default function DashboardReseller({ token, user }: DashboardResellerProp
           {/* TAB 1: ANALYTICS COUNTERS */}
           {activeTab === 'stats' && analytics && (
             <div className="space-y-6">
+              
+              {/* Intelligent order reception mode setting */}
+              <div className="p-5 bg-gradient-to-r from-slate-900/60 to-slate-850/60 rounded-2xl border border-slate-800 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 shadow-xl">
+                <div>
+                  <h4 className="text-sm font-extrabold text-slate-100 font-sans tracking-tight">Storefront Order Intake Dispatcher</h4>
+                  <p className="text-xs text-slate-400 mt-1 leading-relaxed max-w-xl">
+                    By default, your storefront dynamically accept &amp; delivers data bundles. Disable order intake to close your customer store during offline periods or maintenance.
+                  </p>
+                </div>
+                
+                <div className="flex items-center gap-3 shrink-0">
+                  <span className={`text-xxs font-mono font-black tracking-wider px-2.5 py-1 rounded border uppercase ${
+                    analytics.storefront_enabled !== false 
+                      ? 'bg-emerald-950/40 text-emerald-400 border-emerald-800/40' 
+                      : 'bg-rose-950/40 text-rose-400 border-rose-800/40'
+                  }`}>
+                    ● {analytics.storefront_enabled !== false ? 'Store Open' : 'Store Closed'}
+                  </span>
+                  
+                  <button
+                    onClick={async () => {
+                      try {
+                        const targetState = analytics.storefront_enabled === false;
+                        const r = await fetch('/api/reseller/storefront-status', {
+                          method: 'PUT',
+                          headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${token}`
+                          },
+                          body: JSON.stringify({ enabled: targetState })
+                        });
+                        if (r.ok) {
+                          setAnalytics({
+                            ...analytics,
+                            storefront_enabled: targetState
+                          });
+                          showNotification(`Your storefront order reception was successfully toggled ${targetState ? 'ON' : 'OFF'}!`, 'success');
+                        } else {
+                          showNotification('Administrative failure updating storefront status.', 'danger');
+                        }
+                      } catch (e: any) {
+                        showNotification(e.message || 'Network error updating storefront status.', 'danger');
+                      }
+                    }}
+                    className={`px-4 py-2 text-xxs font-black uppercase rounded-lg transition-all cursor-pointer shadow-md ${
+                      analytics.storefront_enabled !== false
+                        ? 'bg-rose-600 hover:bg-rose-700 text-white hover:shadow-rose-600/10'
+                        : 'bg-emerald-500 hover:bg-emerald-600 text-slate-950 hover:shadow-emerald-500/10'
+                    }`}
+                  >
+                    {analytics.storefront_enabled !== false ? 'Turn Off Store' : 'Turn On Store'}
+                  </button>
+                </div>
+              </div>
+
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                 
                 <div className="bg-slate-800/40 p-5 rounded-xl border border-slate-800">
@@ -291,16 +346,41 @@ export default function DashboardReseller({ token, user }: DashboardResellerProp
 
               </div>
 
-              {/* Helpful Reseller information Banner */}
-              <div className="bg-slate-800/20 p-5 rounded-xl border border-slate-800 flex gap-4 text-sm text-slate-300">
-                <Info className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
-                <div className="space-y-1">
-                  <h4 className="font-semibold text-slate-200">Reseller Commission Flow Instructions</h4>
-                  <p className="text-slate-400 leading-relaxed text-xs">
-                    Your storefront dynamic links let friends buy MTN data, Vodafone bundles or other network packages directly using your markup indexes.
-                    Once a consumer settlements mobile money checkouts, our system deducts the administrative cost, automatically allocates their gigabytes, and places the remaining margin into your available cash wallet instantly!
-                  </p>
+              {/* Helpful Information and Community Hub */}
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <div className="lg:col-span-2 bg-slate-800/20 p-5 rounded-xl border border-slate-800 flex gap-4 text-sm text-slate-300">
+                  <Info className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+                  <div className="space-y-1">
+                    <h4 className="font-semibold text-slate-200">Reseller Commission Flow Instructions</h4>
+                    <p className="text-slate-400 leading-relaxed text-xs">
+                      Your storefront dynamic links let friends buy MTN data, Vodafone bundles or other network packages directly using your markup indexes.
+                      Once a consumer settlements mobile money checkouts, our system deducts the administrative cost, automatically allocates their gigabytes, and places the remaining margin into your available cash wallet instantly!
+                    </p>
+                  </div>
                 </div>
+
+                {analytics?.whatsapp_community_link && (
+                  <div className="bg-emerald-950/25 p-5 rounded-xl border border-emerald-800/20 flex flex-col justify-between gap-4 text-sm text-slate-200 relative overflow-hidden group">
+                    <div className="absolute -right-6 -bottom-6 w-24 h-24 bg-emerald-500/5 rounded-full blur-xl group-hover:bg-emerald-500/10 transition"></div>
+                    <div className="flex gap-3">
+                      <span className="text-xl shrink-0">💬</span>
+                      <div className="space-y-1">
+                        <h4 className="font-semibold text-emerald-400 font-sans tracking-tight">Resellers WhatsApp Hub</h4>
+                        <p className="text-slate-400 text-[11px] leading-relaxed">
+                          Join our secure reseller-only WhatsApp group to get instant platform updates, plan status logs, and live network digests.
+                        </p>
+                      </div>
+                    </div>
+                    <a
+                      href={analytics.whatsapp_community_link}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="w-full text-center py-2 bg-emerald-500 hover:bg-emerald-600 font-extrabold font-sans text-xs text-slate-950 rounded-lg transition-all shadow-md hover:shadow-emerald-500/10"
+                    >
+                      Join WhatsApp Community
+                    </a>
+                  </div>
+                )}
               </div>
             </div>
           )}

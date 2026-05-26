@@ -128,4 +128,5 @@ export interface AdminSettings {
   data_api_username?: string;
   data_api_key?: string;
   data_api_url?: string;
+  whatsapp_community_link?: string;
 }

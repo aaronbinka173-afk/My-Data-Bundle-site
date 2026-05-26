@@ -5,7 +5,8 @@
 import React, { useState, useEffect } from 'react';
 import { 
   ShieldCheck, ArrowRight, Store, Smartphone, Landmark, CheckCircle, 
-  ChevronRight, RefreshCw, UserCheck, Key, ShoppingBag, Eye, LogOut, Sparkles, Send
+  ChevronRight, RefreshCw, UserCheck, Key, ShoppingBag, Eye, LogOut, Sparkles, Send,
+  Sun, Moon
 } from 'lucide-react';
 
 import AuthWindow from './components/AuthWindow';
@@ -37,6 +38,21 @@ export default function App() {
 
   // Registration fee modal helper if blocked at register paywall
   const [regFeePaymentDetails, setRegFeePaymentDetails] = useState<any | null>(null);
+
+  // Theme state ('light' | 'dark')
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+    return (localStorage.getItem('mac_hub_theme') as 'light' | 'dark') || 'dark';
+  });
+
+  useEffect(() => {
+    const root = window.document.documentElement;
+    if (theme === 'light') {
+      root.classList.add('light');
+    } else {
+      root.classList.remove('light');
+    }
+    localStorage.setItem('mac_hub_theme', theme);
+  }, [theme]);
 
   useEffect(() => {
     // Determine route slug index from window path:
@@ -236,6 +252,19 @@ export default function App() {
 
           {/* User parameters buttons */}
           <div className="flex items-center gap-3">
+            {/* Elegant Theme Toggle Button */}
+            <button
+              onClick={() => setTheme(prev => prev === 'light' ? 'dark' : 'light')}
+              className="p-2.5 rounded-xl bg-slate-850 hover:bg-slate-800 text-slate-300 hover:text-amber-400 border border-slate-800 transition-all flex items-center justify-center shrink-0 cursor-pointer"
+              title={theme === 'light' ? 'Switch to Dark Mode' : 'Switch to Light Mode'}
+            >
+              {theme === 'light' ? (
+                <Moon className="w-4.5 h-4.5" />
+              ) : (
+                <Sun className="w-4.5 h-4.5 text-amber-500" />
+              )}
+            </button>
+
             {token && user ? (
               <div className="flex items-center gap-3 bg-slate-850 p-1.5 pr-3.5 rounded-xl border border-slate-800 shrink-0">
                 {user.role === 'admin' && (
@@ -452,7 +481,19 @@ export default function App() {
                 Available Bundle Offers
               </h2>
 
-              {storefrontBundles.length === 0 ? (
+              {selectedResellerStore.storefront_enabled === false ? (
+                <div className="text-center py-16 px-6 bg-slate-900 rounded-2xl border border-rose-950/40 text-slate-400 space-y-4 max-w-2xl mx-auto shadow-xl relative overflow-hidden">
+                  <div className="absolute top-0 left-0 w-full h-1 bg-rose-600"></div>
+                  <span className="px-3 py-1 bg-rose-500/10 text-rose-400 font-mono text-xs tracking-wider uppercase rounded border border-rose-500/10 font-bold inline-block">
+                    ● Storefront Closed
+                  </span>
+                  <h3 className="text-xl font-extrabold font-sans text-slate-100">Orders Temporarily Paused</h3>
+                  <p className="text-slate-400 text-sm max-w-md mx-auto leading-relaxed">
+                    The distributor for <span className="text-amber-400 font-semibold">{selectedResellerStore.store_name}</span> is temporarily offline or has paused order reception. 
+                    Please check back later or contact the reseller at <span className="font-mono text-slate-200">{selectedResellerStore.phone}</span>.
+                  </p>
+                </div>
+              ) : storefrontBundles.length === 0 ? (
                 <div className="text-center py-20 bg-slate-900 rounded-2xl border border-slate-850 text-slate-400">This reseller store has no dynamic packages active.</div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">

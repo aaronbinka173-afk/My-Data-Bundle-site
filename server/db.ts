@@ -46,6 +46,7 @@ export async function initDb() {
           store_slug VARCHAR(255) UNIQUE,
           phone VARCHAR(50),
           registration_fee_paid_ghs DECIMAL(10,2) DEFAULT 0,
+          storefront_enabled BOOLEAN DEFAULT true,
           created_at TIMESTAMP DEFAULT NOW()
         );
 
@@ -168,13 +169,20 @@ export async function initDb() {
       await insertSettingIfNotExist('data_api_username', 'mock_username');
       await insertSettingIfNotExist('data_api_key', 'mock_api_key');
       await insertSettingIfNotExist('data_api_url', 'https://subandgain.com/api/data.php');
+      await insertSettingIfNotExist('whatsapp_community_link', 'https://chat.whatsapp.com/GZ0Q1n2m456KeyHere');
 
-      // Alter withdrawal_requests with fee columns
+      // Alter tables for newly introduced columns
       await pool.query(`
         ALTER TABLE withdrawal_requests ADD COLUMN IF NOT EXISTS fee_ghs DECIMAL(10,2) DEFAULT 0;
         ALTER TABLE withdrawal_requests ADD COLUMN IF NOT EXISTS net_amount_ghs DECIMAL(10,2) DEFAULT 0;
       `).catch(err => {
         console.error('Migration error adding fee columns to withdrawal_requests:', err);
+      });
+
+      await pool.query(`
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS storefront_enabled BOOLEAN DEFAULT true;
+      `).catch(err => {
+        console.error('Migration error adding storefront_enabled column to users:', err);
       });
 
       // Seed default bundles
@@ -386,7 +394,8 @@ export async function initDb() {
           max_markup_percent: 50.00,
           admin_fee_percent: 2.00,
           admin_fee_source: 'storefront_earnings',
-          test_mode_enabled: true
+          test_mode_enabled: true,
+          whatsapp_community_link: 'https://chat.whatsapp.com/GZ0Q1n2m456KeyHere'
         }
       };
       fs.writeFileSync(DB_FILE_PATH, JSON.stringify(initialData, null, 2));
@@ -582,6 +591,22 @@ export const db = {
       const user = jdb.users.find(u => u.id === id);
       if (user) {
         user.status = status;
+        saveJsonDb(jdb);
+        return true;
+      }
+      return false;
+    }
+  },
+
+  async updateStorefrontEnabled(id: number, enabled: boolean): Promise<boolean> {
+    if (isPg && pool) {
+      await pool.query("UPDATE users SET storefront_enabled = $1 WHERE id = $2", [enabled, id]);
+      return true;
+    } else {
+      const jdb = loadJsonDb();
+      const user = jdb.users.find(u => u.id === id);
+      if (user) {
+        user.storefront_enabled = enabled;
         saveJsonDb(jdb);
         return true;
       }
@@ -1381,6 +1406,7 @@ export const db = {
         data_api_username: settings.data_api_username || '',
         data_api_key: settings.data_api_key || '',
         data_api_url: settings.data_api_url || 'https://subandgain.com/api/data.php',
+        whatsapp_community_link: settings.whatsapp_community_link || '',
       };
     } else {
       const jdb = loadJsonDb();
@@ -1403,6 +1429,7 @@ export const db = {
         data_api_username: jdb.admin_settings.data_api_username || 'mock_username',
         data_api_key: jdb.admin_settings.data_api_key || 'mock_api_key',
         data_api_url: jdb.admin_settings.data_api_url || 'https://subandgain.com/api/data.php',
+        whatsapp_community_link: jdb.admin_settings.whatsapp_community_link || '',
       };
     }
   },

@@ -4,6 +4,72 @@
 @theme {
   --font-sans: "Outfit", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  
+  --color-slate-950: var(--slate-950);
+  --color-slate-900: var(--slate-900);
+  --color-slate-850: var(--slate-850);
+  --color-slate-800: var(--slate-800);
+  --color-slate-700: var(--slate-700);
+  --color-slate-600: var(--slate-600);
+  --color-slate-500: var(--slate-500);
+  --color-slate-400: var(--slate-400);
+  --color-slate-300: var(--slate-300);
+  --color-slate-200: var(--slate-200);
+  --color-slate-100: var(--slate-100);
+  --color-slate-50: var(--slate-50);
+}
+
+:root {
+  --slate-950: #020617;
+  --slate-900: #0f172a;
+  --slate-850: #131c2e;
+  --slate-800: #1e293b;
+  --slate-700: #334155;
+  --slate-600: #475569;
+  --slate-500: #64748b;
+  --slate-400: #94a3b8;
+  --slate-300: #cbd5e1;
+  --slate-200: #cbd5e1;
+  --slate-100: #f8fafc;
+  --slate-50: #f8fafc;
+}
+
+/* Light Mode Overrides */
+.light {
+  --slate-950: #f8fafc;       /* Lightest Page body background */
+  --slate-900: #ffffff;       /* Pure white Card / Header backgrounds */
+  --slate-850: #f1f5f9;       /* Light neutral gray for sub-sections/tabs */
+  --slate-800: #e2e8f0;       /* Divider lines and borders */
+  --slate-700: #cbd5e1;       /* Darker borders or light badges */
+  --slate-600: #94a3b8;       
+  --slate-500: #64748b;       /* Soft regular text */
+  --slate-400: #475569;       /* Slate sub-headings text */
+  --slate-300: #1e293b;       /* Dark primary readable text */
+  --slate-200: #0f172a;       /* Dark contrast accents */
+  --slate-100: #020617;       /* Main title primary heading text */
+  --slate-50: #0f172a;
+}
+
+/* Maintain dark-text contrast for colored items inside light mode */
+.light [class*="bg-amber-"], 
+.light [class*="bg-rose-"], 
+.light [class*="bg-emerald-"], 
+.light [class*="bg-indigo-"],
+.light [class*="bg-rose-600"],
+.light [class*="bg-emerald-700"],
+.light [class*="bg-indigo-950"] {
+  --slate-950: #020617;
+  --slate-900: #0f172a;
+  --slate-850: #131c2e;
+  --slate-800: #1e293b;
+  --slate-700: #334155;
+  --slate-600: #475569;
+  --slate-500: #64748b;
+  --slate-400: #94a3b8;
+  --slate-300: #cbd5e1;
+  --slate-200: #cbd5e1;
+  --slate-100: #f8fafc;
+  --slate-50: #f8fafc;
 }
 
 @layer utilities {

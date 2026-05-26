@@ -582,6 +582,27 @@ export default function DashboardAdmin({ token, user }: DashboardAdminProps) {
     }
   };
 
+  const handleUpdateWhatsappLink = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!settings) return;
+    try {
+      const res = await fetch('/api/admin/settings/whatsapp-community', {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ link: settings.whatsapp_community_link })
+      });
+      if (res.ok) {
+        showNotification('WhatsApp reseller community invite link updated.', 'success');
+        fetchData();
+      } else {
+        const d = await res.json().catch(() => ({}));
+        showNotification(d.error || 'Failed to update WhatsApp link.', 'danger');
+      }
+    } catch {
+      showNotification('Transmission error.', 'danger');
+    }
+  };
+
   const fetchSmsLogs = async () => {
     setSmsLogsLoading(true);
     try {
@@ -1439,6 +1460,31 @@ export default function DashboardAdmin({ token, user }: DashboardAdminProps) {
                   </div>
                   <button type="submit" className="w-full py-1.5 bg-amber-500 hover:bg-amber-600 transition text-slate-950 font-bold text-xs rounded uppercase">
                     Save payout tax rate
+                  </button>
+                </form>
+
+                {/* Resellers Only WhatsApp Community Link configuration */}
+                <form onSubmit={handleUpdateWhatsappLink} className="bg-slate-800/20 p-5 rounded-xl border border-slate-800 space-y-4 flex flex-col justify-between">
+                  <div>
+                    <h4 className="font-semibold text-slate-100 border-b border-slate-800 pb-2 flex items-center gap-1.5">
+                      <span className="text-emerald-500 text-base">💬</span> Reseller WhatsApp Link
+                    </h4>
+                    <p className="text-slate-500 text-xs block mt-1.5">
+                      Invite link displayed on authorized reseller dashboards so they can instantly join your update channel &amp; community pool.
+                    </p>
+                    <div className="mt-3">
+                      <label className="text-slate-400 text-xs font-mono block mb-1">WhatsApp Group / Community Link</label>
+                      <input
+                        type="url"
+                        placeholder="https://chat.whatsapp.com/..."
+                        value={settings.whatsapp_community_link || ''}
+                        onChange={(e) => setSettings({ ...settings, whatsapp_community_link: e.target.value })}
+                        className="w-full bg-slate-900 border border-slate-700 focus:border-amber-500 p-2 text-sm text-slate-200 rounded focus:outline-none"
+                      />
+                    </div>
+                  </div>
+                  <button type="submit" className="w-full py-1.5 bg-emerald-600 hover:bg-emerald-700 transition text-slate-950 font-bold text-xs rounded uppercase mt-auto">
+                    Save Resellers link
                   </button>
                 </form>
 
