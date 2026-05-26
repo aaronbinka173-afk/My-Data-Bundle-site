@@ -30,12 +30,21 @@ export default function AuthWindow({ onAuthSuccess, onSetView, onShowPaymentNoti
 
   // Load registration settings immediately on render
   React.useEffect(() => {
-    fetch('/api/bundles') // standard active bundles fetch
-      .then(() => fetch('/api/admin/settings')) // speculative admin fetch
-      .catch(() => {});
-    
-    // Fallback settings setup
-    setAdminPricePolicy({ fee: 50.00, enabled: true });
+    fetch('/api/registration-fee')
+      .then(res => {
+        if (!res.ok) throw new Error('Failed to retrieve registration settings');
+        return res.json();
+      })
+      .then(data => {
+        setAdminPricePolicy({
+          fee: data.fee_ghs,
+          enabled: data.fee_enabled
+        });
+      })
+      .catch(() => {
+        // Fallback settings setup if connection fails
+        setAdminPricePolicy({ fee: 50.00, enabled: true });
+      });
   }, []);
 
   const handleSlugCalculation = (title: string) => {
