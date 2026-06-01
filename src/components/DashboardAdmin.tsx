@@ -1,17 +1,28 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Users, BarChart3, Database, Landmark, Settings, RefreshCw, AlertCircle, CheckCircle2, XCircle, 
-  Trash2, Edit, Plus, Eye, History, Key, MessageSquare, Send, Smartphone, ShoppingCart
+  Trash2, Edit, Plus, Eye, History, Key, MessageSquare, Send, Smartphone, ShoppingCart, RotateCcw, Mail
 } from 'lucide-react';
 import { Bundle, ResellerAccount, WithdrawalRequest, Order, DataDeliveryLog, AdminSettings } from '../types';
 import CheckoutModal from './CheckoutModal';
+import { 
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
+} from 'recharts';
 
 interface DashboardAdminProps {
   token: string;
   user?: any;
+  onTypographyChange?: (
+    font?: string, 
+    size?: string, 
+    colorPrimary?: string, 
+    colorBody?: string, 
+    colorMuted?: string, 
+    colorAccent?: string
+  ) => void;
 }
 
-export default function DashboardAdmin({ token, user }: DashboardAdminProps) {
+export default function DashboardAdmin({ token, user, onTypographyChange }: DashboardAdminProps) {
   const [activeTab, setActiveTab] = useState<'stats' | 'bundles' | 'resellers' | 'withdrawals' | 'orders' | 'logs' | 'settings'>('stats');
   
   // States
@@ -19,8 +30,10 @@ export default function DashboardAdmin({ token, user }: DashboardAdminProps) {
   const [stats, setStats] = useState<any>(null);
   const [bundles, setBundles] = useState<Bundle[]>([]);
   const [resellers, setResellers] = useState<ResellerAccount[]>([]);
+  const [accountFilter, setAccountFilter] = useState<'all' | 'reseller' | 'customer'>('all');
   const [withdrawals, setWithdrawals] = useState<WithdrawalRequest[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
+  const [orderStatusFilter, setOrderStatusFilter] = useState<'all' | 'paid' | 'delivered' | 'failed' | 'pending'>('all');
   const [deliveryLogs, setDeliveryLogs] = useState<DataDeliveryLog[]>([]);
   const [settings, setSettings] = useState<AdminSettings | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
@@ -42,6 +55,13 @@ export default function DashboardAdmin({ token, user }: DashboardAdminProps) {
   // Decline withdrawal form
   const [declineId, setDeclineId] = useState<number | null>(null);
   const [declineReason, setDeclineReason] = useState<string>('');
+  const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
+
+  // Administrative withdrawal states
+  const [adminWithdrawModalOpen, setAdminWithdrawModalOpen] = useState<boolean>(false);
+  const [adminWithdrawAmount, setAdminWithdrawAmount] = useState<string>('');
+  const [adminWithdrawDetails, setAdminWithdrawDetails] = useState<string>('');
+  const [adminWithdrawSubmitting, setAdminWithdrawSubmitting] = useState<boolean>(false);
 
   // Retry states
   const [retryingId, setRetryingId] = useState<number | null>(null);
@@ -67,6 +87,19 @@ export default function DashboardAdmin({ token, user }: DashboardAdminProps) {
   const [smsLogsLoading, setSmsLogsLoading] = useState(false);
   const [smsDispatchLoading, setSmsDispatchLoading] = useState(false);
   const [togglingResellerId, setTogglingResellerId] = useState<number | null>(null);
+
+  // Agent Email states
+  const [emailModalOpen, setEmailModalOpen] = useState(false);
+  const [emailTarget, setEmailTarget] = useState('all');
+  const [emailSubject, setEmailSubject] = useState('');
+  const [emailMessage, setEmailMessage] = useState('');
+  const [emailDispatchLoading, setEmailDispatchLoading] = useState(false);
+
+  // SubAndGain API catalog fetching and base list importing states
+  const [subAndGainPlans, setSubAndGainPlans] = useState<any[]>([]);
+  const [fetchingSgPlans, setFetchingSgPlans] = useState<boolean>(false);
+  const [globalSgMargin, setGlobalSgMargin] = useState<string>('2.0');
+  const [sgImporting, setSgImporting] = useState<boolean>(false);
 
   // Custom Confirmation Dialog State
   const [confirmDialog, setConfirmDialog] = useState<{
@@ -120,6 +153,8 @@ export default function DashboardAdmin({ token, user }: DashboardAdminProps) {
       if (activeTab === 'stats') {
         const r1 = await fetch('/api/admin/dashboard', { headers });
         if (r1.ok) setStats(await r1.json());
+        const r7 = await fetch('/api/admin/settings', { headers });
+        if (r7.ok) setSettings(await r7.json());
       } else if (activeTab === 'bundles') {
         const r2 = await fetch('/api/admin/bundles', { headers });
         if (r2.ok) setBundles(await r2.json());
@@ -365,6 +400,87 @@ export default function DashboardAdmin({ token, user }: DashboardAdminProps) {
     );
   };
 
+  // --- DATABASE EXPORT AND IMPORT HANDLERS ---
+  const handleExportDatabase = async () => {
+    try {
+      showNotification('Generating database backup manifest...', 'success');
+      const response = await fetch('/api/admin/db-export', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (!response.ok) {
+        throw new Error('Export request unsuccessful.');
+      }
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `machub_backup_${new Date().toISOString().split('T')[0]}.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+      showNotification('Database backup downloaded successfully!', 'success');
+    } catch (e: any) {
+      console.error(e);
+      showNotification('Failed to export database backup: ' + e.message, 'danger');
+    }
+  };
+
+  const [importingDb, setImportingDb] = useState<boolean>(false);
+
+  const handleImportDatabase = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    requestConfirmation(
+      'RESTORE SYSTEM BACKUP?',
+      `Are you sure you want to restore "${file.name}"? This will overwrite the entire data layout including users, resellers, orders, and credentials with the backup file data!`,
+      async () => {
+        setImportingDb(true);
+        try {
+          const reader = new FileReader();
+          reader.onload = async (event) => {
+            try {
+              const text = event.target?.result;
+              if (typeof text !== 'string') throw new Error('Could not read backup file.');
+              const json = JSON.parse(text);
+
+              // Basic validation
+              if (!json.users || !json.bundles || !json.orders) {
+                throw new Error('Invalid database backup format. Missing key items like users or bundles lists.');
+              }
+
+              const response = await fetch('/api/admin/db-import', {
+                method: 'POST',
+                headers: {
+                  'Authorization': `Bearer ${token}`,
+                  'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(json)
+              });
+
+              if (response.ok) {
+                showNotification('Database successfully restored from backup file!', 'success');
+                fetchData();
+              } else {
+                const errData = await response.json();
+                showNotification(errData.error || 'Failed to restore database.', 'danger');
+              }
+            } catch (err: any) {
+              showNotification(err.message, 'danger');
+            } finally {
+              setImportingDb(false);
+            }
+          };
+          reader.readAsText(file);
+        } catch (err: any) {
+          showNotification('Reading backup failed: ' + err.message, 'danger');
+          setImportingDb(false);
+        }
+      }
+    );
+  };
+
   // Withdrawal approve/decline
   const handleApproveW = async (id: number) => {
     requestConfirmation(
@@ -411,6 +527,49 @@ export default function DashboardAdmin({ token, user }: DashboardAdminProps) {
       }
     } catch {
       showNotification('Connection failure.', 'danger');
+    }
+  };
+
+  const handleAdminWithdrawSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!adminWithdrawAmount || isNaN(Number(adminWithdrawAmount)) || Number(adminWithdrawAmount) <= 0) {
+      showNotification('Please enter a valid positive payout amount.', 'danger');
+      return;
+    }
+    if (!adminWithdrawDetails.trim()) {
+      showNotification('Please provide manual payout destination details.', 'danger');
+      return;
+    }
+
+    setAdminWithdrawSubmitting(true);
+    try {
+      const res = await fetch('/api/admin/withdraw', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          amount: Number(adminWithdrawAmount),
+          details: adminWithdrawDetails.trim()
+        })
+      });
+
+      const data = await res.json();
+      if (res.ok) {
+        showNotification(data.message || 'Admin withdrawal completed successfully!', 'success');
+        setAdminWithdrawModalOpen(false);
+        setAdminWithdrawAmount('');
+        setAdminWithdrawDetails('');
+        // Refresh dashboard data and settings
+        fetchData();
+      } else {
+        showNotification(data.error || 'Failed to process admin withdrawal.', 'danger');
+      }
+    } catch {
+      showNotification('Glitch while processing withdrawal request.', 'danger');
+    } finally {
+      setAdminWithdrawSubmitting(false);
     }
   };
 
@@ -543,6 +702,140 @@ export default function DashboardAdmin({ token, user }: DashboardAdminProps) {
     }
   };
 
+  const handleLoadSubAndGainPlans = async () => {
+    if (user?.email?.toLowerCase() !== 'aaronbinka173@gmail.com') {
+      showNotification('Only the platform owner (aaronbinka173@gmail.com) is authorized to fetch or inspect data API plans.', 'danger');
+      return;
+    }
+    setFetchingSgPlans(true);
+    try {
+      const res = await fetch('/api/admin/subandgain/plans', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const enriched = (data.plans || []).map((item: any) => {
+          const matchedBundle = bundles.find((b: any) => b.provider_plan_code === item.provider_plan_code);
+          let itemMargin = Number(globalSgMargin) || 2.0;
+          if (matchedBundle) {
+            const calculatedMargin = Number(matchedBundle.admin_base_price_ghs) - Number(item.base_price_ghs);
+            if (calculatedMargin >= 0) {
+              itemMargin = Number(calculatedMargin.toFixed(2));
+            }
+          }
+          return {
+            ...item,
+            customMargin: itemMargin,
+            isChecked: true
+          };
+        });
+        setSubAndGainPlans(enriched);
+        showNotification(`Loaded ${enriched.length} packages from ${data.provider === 'subandgain-live' ? 'SubAndGain Live Gateway' : 'Ghana base catalog API'}.`, 'success');
+      } else {
+        const d = await res.json().catch(() => ({}));
+        showNotification(d.error || 'Failed to load SubAndGain plans.', 'danger');
+      }
+    } catch {
+      showNotification('Communication failure reading API plans.', 'danger');
+    } finally {
+      setFetchingSgPlans(false);
+    }
+  };
+
+  const handleApplyGlobalSgMargin = (val: string) => {
+    setGlobalSgMargin(val);
+    const mNum = Number(val) || 0;
+    setSubAndGainPlans(prev => prev.map(p => ({
+      ...p,
+      customMargin: mNum
+    })));
+  };
+
+  const handleImportSelectedSgPlans = async () => {
+    if (user?.email?.toLowerCase() !== 'aaronbinka173@gmail.com') {
+      showNotification('Only the platform owner (aaronbinka173@gmail.com) is authorized to reset or synchronize data packages.', 'danger');
+      return;
+    }
+    const selected = subAndGainPlans.filter(p => p.isChecked);
+    if (selected.length === 0) {
+      showNotification('Please select at least one bundle package to import.', 'danger');
+      return;
+    }
+
+    setSgImporting(true);
+    try {
+      const payloadPlans = selected.map(p => ({
+        name: p.name,
+        network: p.network,
+        data_amount: p.data_amount,
+        validity_days: p.validity_days || 30,
+        admin_base_price_ghs: Number(p.base_price_ghs) + Number(p.customMargin),
+        provider_plan_code: p.provider_plan_code
+      }));
+
+      const res = await fetch('/api/admin/subandgain/import', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ plans: payloadPlans })
+      });
+
+      if (res.ok) {
+        const d = await res.json();
+        showNotification(d.message || 'SubAndGain plans deployed and synchronized successfully!', 'success');
+        const r2 = await fetch('/api/admin/bundles', { headers: { Authorization: `Bearer ${token}` } });
+        if (r2.ok) {
+          const bs = await r2.json();
+          setBundles(bs);
+        }
+        fetchData();
+      } else {
+        const d = await res.json().catch(() => ({}));
+        showNotification(d.error || 'Failed to synchronize selected bundles.', 'danger');
+      }
+    } catch {
+      showNotification('Error transmitting pricing data to database.', 'danger');
+    } finally {
+      setSgImporting(false);
+    }
+  };
+
+  const handleResetBundlesToDefaults = async () => {
+    if (user?.email?.toLowerCase() !== 'aaronbinka173@gmail.com') {
+      showNotification('Only the platform owner (aaronbinka173@gmail.com) is authorized to reset the data packages.', 'danger');
+      return;
+    }
+    if (!resetConfirmOpen) {
+      setResetConfirmOpen(true);
+      showNotification('CONFIRMATION REQ: Click "Confirm Package Wipe" again to proceed.', 'danger');
+      return;
+    }
+    setResetConfirmOpen(false);
+    setLoading(true);
+    try {
+      const res = await fetch('/api/admin/bundles/reset', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const d = await res.json();
+        showNotification(d.message || 'System data bundles successfully reset to presets!', 'success');
+        const r2 = await fetch('/api/admin/bundles', { headers: { Authorization: `Bearer ${token}` } });
+        if (r2.ok) {
+          const bs = await r2.json();
+          setBundles(bs);
+        }
+        fetchData();
+      } else {
+        const d = await res.json().catch(() => ({}));
+        showNotification(d.error || 'Failed to reset bundles.', 'danger');
+      }
+    } catch {
+      showNotification('Error contacting database server during reset.', 'danger');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleToggleTestMode = async (enabled: boolean) => {
     if (!settings) return;
     try {
@@ -586,20 +879,163 @@ export default function DashboardAdmin({ token, user }: DashboardAdminProps) {
     e.preventDefault();
     if (!settings) return;
     try {
-      const res = await fetch('/api/admin/settings/whatsapp-community', {
+      const resComm = await fetch('/api/admin/settings/whatsapp-community', {
         method: 'PUT',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ link: settings.whatsapp_community_link })
       });
-      if (res.ok) {
-        showNotification('WhatsApp reseller community invite link updated.', 'success');
+      const resChan = await fetch('/api/admin/settings/whatsapp-channel', {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ link: settings.whatsapp_channel_link })
+      });
+      if (resComm.ok && resChan.ok) {
+        showNotification('WhatsApp Community and Channel links updated successfully.', 'success');
         fetchData();
       } else {
-        const d = await res.json().catch(() => ({}));
-        showNotification(d.error || 'Failed to update WhatsApp link.', 'danger');
+        showNotification('Failed to update one or both WhatsApp links.', 'danger');
       }
     } catch {
       showNotification('Transmission error.', 'danger');
+    }
+  };
+
+  const handleUpdateBranding = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!settings) return;
+    try {
+      const res = await fetch('/api/admin/settings/branding', {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          site_name: settings.site_name, 
+          site_color: settings.site_color,
+          site_bg_color: settings.site_bg_color,
+          site_bg_image: settings.site_bg_image
+        })
+      });
+      if (res.ok) {
+        showNotification('Site brand settings and theme color updated! Refreshing page to apply...', 'success');
+        setTimeout(() => {
+          if (typeof window !== 'undefined') {
+            window.location.reload();
+          }
+        }, 1200);
+      } else {
+        const d = await res.json().catch(() => ({}));
+        showNotification(d.error || 'Failed to update branding.', 'danger');
+      }
+    } catch {
+      showNotification('Transmission error.', 'danger');
+    }
+  };
+
+  const handleUpdateSupportSettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!settings) return;
+    try {
+      const res = await fetch('/api/admin/settings/support', {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          online_support_enabled: !!settings.online_support_enabled,
+          online_support_restrictions: settings.online_support_restrictions || ''
+        })
+      });
+      if (res.ok) {
+        showNotification('Online live customer support and restriction settings updated successfully!', 'success');
+        fetchData();
+      } else {
+        const d = await res.json().catch(() => ({}));
+        showNotification(d.error || 'Failed to update support settings.', 'danger');
+      }
+    } catch {
+      showNotification('Transmission error.', 'danger');
+    }
+  };
+
+  const handleUpdateReviewsPopup = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!settings) return;
+    try {
+      const res = await fetch('/api/admin/settings/reviews-popup', {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          reviews_popup_enabled: settings.reviews_popup_enabled !== false
+        })
+      });
+      if (res.ok) {
+        showNotification('5-Star rating popups global display status updated successfully!', 'success');
+        fetchData();
+      } else {
+        const d = await res.json().catch(() => ({}));
+        showNotification(d.error || 'Failed to update reviews popup status.', 'danger');
+      }
+    } catch {
+      showNotification('Transmission error.', 'danger');
+    }
+  };
+
+  const handleUpdateTypography = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!settings) return;
+    try {
+      const res = await fetch('/api/admin/settings/typography', {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          global_font_style: settings.global_font_style,
+          global_font_size: settings.global_font_size,
+          global_text_color_primary: settings.global_text_color_primary,
+          global_text_color_body: settings.global_text_color_body,
+          global_text_color_muted: settings.global_text_color_muted,
+          global_text_color_accent: settings.global_text_color_accent,
+        })
+      });
+      if (res.ok) {
+        showNotification('Platform typography, custom text sizes, and writing colors updated successfully!', 'success');
+        if (onTypographyChange) {
+          onTypographyChange(
+            settings.global_font_style,
+            settings.global_font_size,
+            settings.global_text_color_primary,
+            settings.global_text_color_body,
+            settings.global_text_color_muted,
+            settings.global_text_color_accent
+          );
+        }
+      } else {
+        const d = await res.json().catch(() => ({}));
+        showNotification(d.error || 'Failed to update typography settings.', 'danger');
+      }
+    } catch {
+      showNotification('Network transmission error.', 'danger');
+    }
+  };
+
+  const handleUpdateCustomerTax = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!settings) return;
+    try {
+      const res = await fetch('/api/admin/settings/customer-tax', {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          enabled: !!settings.customer_tax_enabled,
+          percent: Number(settings.customer_tax_percent || 0),
+          flatGhs: Number(settings.customer_tax_flat_ghs || 0)
+        })
+      });
+      if (res.ok) {
+        showNotification('Storefront customer tax/transaction fee settings saved successfully.', 'success');
+        fetchData();
+      } else {
+        const d = await res.json().catch(() => ({}));
+        showNotification(d.error || 'Failed to apply tax settings.', 'danger');
+      }
+    } catch {
+      showNotification('Communication failure updating tax configuration.', 'danger');
     }
   };
 
@@ -693,6 +1129,48 @@ export default function DashboardAdmin({ token, user }: DashboardAdminProps) {
       showNotification('Network boundary error dispatching SMS.', 'danger');
     } finally {
       setSmsDispatchLoading(false);
+    }
+  };
+
+  const handleSendEmailSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!emailSubject.trim()) {
+      showNotification('Please enter an Email subject.', 'danger');
+      return;
+    }
+    if (!emailMessage.trim()) {
+      showNotification('Please enter the email Message body.', 'danger');
+      return;
+    }
+
+    setEmailDispatchLoading(true);
+    try {
+      const response = await fetch('/api/admin/send-email', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          target: emailTarget,
+          subject: emailSubject,
+          message: emailMessage
+        })
+      });
+
+      const data = await response.json();
+      if (response.ok) {
+        showNotification(data.messagePrefix || 'SMTP Email successfully dispatched!', 'success');
+        setEmailSubject('');
+        setEmailMessage('');
+        setEmailModalOpen(false);
+      } else {
+        showNotification(data.error || 'Failed to dispatch outbound Email.', 'danger');
+      }
+    } catch {
+      showNotification('Network boundary error dispatching Email.', 'danger');
+    } finally {
+      setEmailDispatchLoading(false);
     }
   };
 
@@ -809,27 +1287,199 @@ export default function DashboardAdmin({ token, user }: DashboardAdminProps) {
           
           {/* TAB 1: STATISTICS / ANALYTICS */}
           {activeTab === 'stats' && stats && (
-            <div className="space-y-6">
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="space-y-6 animate-fade-in">
+              
+              {/* LOW VTU BALANCE ALERT CALLOUT */}
+              {(stats.vtu_provider_balance_ghs ?? 124.50) < 10 && (
+                <div className="bg-rose-950/40 border border-rose-900/60 p-4 rounded-xl flex flex-col md:flex-row items-start md:items-center justify-between gap-4 shadow-lg animate-pulse-subtle">
+                  <div className="flex items-start gap-3">
+                    <div className="p-2.5 bg-rose-500/10 text-rose-400 rounded-lg shrink-0 border border-rose-500/10">
+                      <AlertCircle className="w-5 h-5 text-rose-400" />
+                    </div>
+                    <div>
+                      <h4 className="font-bold text-slate-100 text-sm">⚠️ Critical Gateway Notice: Low VTU Provider Wallet Balance</h4>
+                      <p className="text-xs text-rose-300 mt-1 leading-relaxed">
+                        Your SubAndGain API wallet balance currently stands at <span className="font-mono font-bold text-rose-400">₵{Number(stats.vtu_provider_balance_ghs ?? 124.50).toFixed(2)}</span>, which is below the safe threshold of ₵10.00. Outbound reseller bundle fulfillments could fail if this depletes!
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 w-full md:w-auto shrink-0 bg-slate-900/60 p-2 rounded-lg border border-slate-800">
+                    <input
+                      type="number"
+                      placeholder="GHS Amt"
+                      id="vtu-topup-alert-input"
+                      className="w-24 bg-slate-950 border border-slate-800 focus:border-amber-500 text-xs text-slate-200 px-2.5 py-1.5 rounded-md focus:outline-none placeholder-slate-600"
+                    />
+                    <button
+                      onClick={async () => {
+                        const valInput = document.getElementById('vtu-topup-alert-input') as HTMLInputElement;
+                        const val = Number(valInput?.value);
+                        if (!val || val <= 0 || isNaN(val)) {
+                          showNotification('Please enter a valid positive top up amount.', 'danger');
+                          return;
+                        }
+                        try {
+                          const res = await fetch('/api/admin/subandgain/topup', {
+                            method: 'POST',
+                            headers: {
+                              'Authorization': `Bearer ${token}`,
+                              'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({ amount: val })
+                          });
+                          const data = await res.json();
+                          if (res.ok) {
+                            showNotification(data.message, 'success');
+                            if (valInput) valInput.value = '';
+                            fetchData();
+                          } else {
+                            showNotification(data.error || 'Failed to top up balance.', 'danger');
+                          }
+                        } catch {
+                          showNotification('Network connection error.', 'danger');
+                        }
+                      }}
+                      className="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-extrabold text-xs rounded-md shadow-md transition whitespace-nowrap"
+                    >
+                      Fund Wallet
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* STATS HERO GRID - 5 COLUMN GRID */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
                 <div className="bg-slate-800/50 p-5 rounded-xl border border-slate-800">
                   <span className="text-slate-400 text-xs font-mono block">PARTNER STORES</span>
                   <div className="text-3xl font-bold font-sans text-slate-200 mt-2">{stats.total_resellers}</div>
                   <p className="text-xs text-slate-500 mt-1">Vetted storefronts live</p>
                 </div>
+
                 <div className="bg-slate-800/50 p-5 rounded-xl border border-slate-800">
                   <span className="text-slate-400 text-xs font-mono block">TOTAL CUSTOMERS</span>
                   <div className="text-3xl font-bold font-sans text-slate-200 mt-2">{stats.total_customers}</div>
                   <p className="text-xs text-slate-500 mt-1">Unique shoppers served</p>
                 </div>
+
                 <div className="bg-slate-800/50 p-5 rounded-xl border border-slate-800">
                   <span className="text-slate-400 text-xs font-mono block">ACCUMULATED SALES REVENUE</span>
                   <div className="text-3xl font-bold font-sans text-amber-400 mt-2">₵{stats.total_revenue_ghs?.toFixed(2)}</div>
                   <p className="text-xs text-slate-500 mt-1">Registrations + Bundles</p>
                 </div>
+
                 <div className="bg-slate-800/50 p-5 rounded-xl border border-slate-800">
                   <span className="text-slate-400 text-xs font-mono block">ADMIN ROYALTY FEES EARNED</span>
                   <div className="text-3xl font-bold font-sans text-emerald-400 mt-2">₵{stats.total_admin_fees_earned_ghs?.toFixed(2)}</div>
                   <p className="text-xs text-slate-500 mt-1">From reseller retail margins</p>
+                </div>
+
+                {/* 5TH CARD: VTU PROVIDER PREPAID CASH BALANCE */}
+                <div className="bg-slate-800/50 p-5 rounded-xl border border-slate-800 flex flex-col justify-between">
+                  <div>
+                    <span className="text-slate-400 text-xs font-mono block">VTU GATEWAY WALLET</span>
+                    <div className={`text-3xl font-bold font-sans mt-2 ${(stats.vtu_provider_balance_ghs ?? 124.50) < 10 ? 'text-rose-400 animate-pulse-fast' : 'text-amber-500'}`}>
+                      ₵{Number(stats.vtu_provider_balance_ghs ?? 124.50).toFixed(2)}
+                    </div>
+                  </div>
+                  <div className="flex gap-1.5 mt-2.5">
+                    <input
+                      type="number"
+                      placeholder="₵ GHS"
+                      id="grid-topup-direct-input"
+                      className="w-16 bg-slate-900 border border-slate-750 focus:border-amber-500 text-[10px] text-slate-200 px-1.5 py-1 rounded focus:outline-none"
+                    />
+                    <button
+                      onClick={async () => {
+                        const valInput = document.getElementById('grid-topup-direct-input') as HTMLInputElement;
+                        const val = Number(valInput?.value);
+                        if (!val || val <= 0 || isNaN(val)) {
+                          showNotification('Enter positive amount.', 'danger');
+                          return;
+                        }
+                        try {
+                          const res = await fetch('/api/admin/subandgain/topup', {
+                            method: 'POST',
+                            headers: {
+                              'Authorization': `Bearer ${token}`,
+                              'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({ amount: val })
+                          });
+                          const data = await res.json();
+                          if (res.ok) {
+                            showNotification(data.message, 'success');
+                            if (valInput) valInput.value = '';
+                            fetchData();
+                          } else {
+                            showNotification(data.error || 'Failed topup.', 'danger');
+                          }
+                        } catch {
+                          showNotification('Network error.', 'danger');
+                        }
+                      }}
+                      className="px-2 py-1 bg-amber-500 hover:bg-amber-600 active:bg-amber-700 text-slate-950 font-extrabold text-[10px] rounded transition"
+                    >
+                      Topup
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* DAILY REVENUE TRENDS BAR CHART USING RECHARTS */}
+              <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-xl space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-3">
+                  <div>
+                    <h3 className="text-base font-bold text-slate-200">7-Day Outbound Sales & Royalties Stream</h3>
+                    <p className="text-xs text-slate-500">Aggregated daily metrics comparing retail merchant orders vs admin fee revenues.</p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-4 text-xs font-mono bg-slate-950/40 px-3 py-1.5 rounded-lg border border-slate-800/60">
+                    <div className="flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 bg-amber-500 rounded-sm"></span>
+                      <span className="text-slate-300">Sales: ₵{stats.daily_revenue_trends?.reduce((sum: number, d: any) => sum + d.revenue, 0).toFixed(2)}</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 bg-emerald-500 rounded-sm"></span>
+                      <span className="text-slate-300">Royalty Fees: ₵{stats.daily_revenue_trends?.reduce((sum: number, d: any) => sum + d.admin_fees, 0).toFixed(2)}</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="h-72 w-full text-slate-300 pt-2" id="vtu-sales-recharts-container">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart
+                      data={stats.daily_revenue_trends || []}
+                      margin={{ top: 10, right: 10, left: -10, bottom: 0 }}
+                    >
+                      <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.2} vertical={false} />
+                      <XAxis 
+                        dataKey="label" 
+                        stroke="#64748b" 
+                        fontSize={10} 
+                        tickLine={false}
+                        axisLine={{ stroke: '#334155' }}
+                        tickMargin={8}
+                      />
+                      <YAxis 
+                        stroke="#64748b" 
+                        fontSize={10} 
+                        tickLine={false}
+                        axisLine={{ stroke: '#334155' }}
+                        tickFormatter={(v) => `₵${v}`}
+                        tickMargin={6}
+                      />
+                      <Tooltip 
+                        contentStyle={{ backgroundColor: '#090d16', borderColor: '#1e293b', borderRadius: '10px', fontSize: '11px', boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.4)' }}
+                        labelStyle={{ fontWeight: 'bold', color: '#f1f5f9', marginBottom: '4px' }}
+                        itemStyle={{ padding: '2px 0' }}
+                        formatter={(value: any, name: any) => [
+                          `₵${Number(value).toFixed(2)}`, 
+                          name === 'revenue' ? '📈 Sales Value' : name === 'admin_fees' ? '👑 Admin Profit' : name
+                        ]}
+                      />
+                      <Bar dataKey="revenue" fill="#f59e0b" radius={[4, 4, 0, 0]} name="revenue" maxBarSize={32} />
+                      <Bar dataKey="admin_fees" fill="#10b981" radius={[4, 4, 0, 0]} name="admin_fees" maxBarSize={32} />
+                    </BarChart>
+                  </ResponsiveContainer>
                 </div>
               </div>
 
@@ -866,6 +1516,109 @@ export default function DashboardAdmin({ token, user }: DashboardAdminProps) {
                   </button>
                 </div>
               </div>
+
+              {/* ADMIN DIRECT EARNINGS WITHDRAWALS SECTION */}
+              <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-xl space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-3">
+                  <div>
+                    <h3 className="text-base font-bold text-slate-200">👑 Administrative Profit Claims & Revenue Payouts</h3>
+                    <p className="text-xs text-slate-500">Claim your accumulated marketplace sales royalty cuts and merchant store subscription fees directly.</p>
+                  </div>
+                  <button
+                    onClick={() => setAdminWithdrawModalOpen(true)}
+                    className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 active:bg-emerald-700 text-slate-950 font-extrabold text-xs rounded-lg shadow transition whitespace-nowrap"
+                  >
+                    🚀 Withdraw Admin Profit
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div className="bg-slate-950/30 p-4 rounded-xl border border-slate-850">
+                    <span className="text-slate-400 text-xxs font-mono block uppercase">Gross Admin Profit (All-Time)</span>
+                    <div className="text-2xl font-bold font-sans text-slate-200 mt-1">
+                      ₵{(Number(stats.total_admin_fees_earned_ghs || 0) + Number(stats.total_registrations_earned_ghs || 0)).toFixed(2)}
+                    </div>
+                    <p className="text-[10px] text-slate-500 mt-1">₵{Number(stats.total_admin_fees_earned_ghs || 0).toFixed(2)} royalties + ₵{Number(stats.total_registrations_earned_ghs || 0).toFixed(2)} signups</p>
+                  </div>
+
+                  <div className="bg-slate-950/30 p-4 rounded-xl border border-slate-850">
+                    <span className="text-slate-400 text-xxs font-mono block uppercase">Total Profits Withdrawn</span>
+                    <div className="text-2xl font-bold font-sans text-rose-450 mt-1">
+                      -₵{Number(settings?.admin_total_withdrawn_ghs || 0).toFixed(2)}
+                    </div>
+                    <p className="text-[10px] text-slate-500 mt-1">Disbursed out of system</p>
+                  </div>
+
+                  <div className="bg-slate-950/30 p-4 rounded-xl border border-slate-850 bg-emerald-500/5">
+                    <span className="text-emerald-400 text-xxs font-mono block uppercase">Available Claims Balance</span>
+                    <div className="text-2xl font-bold font-sans text-emerald-400 mt-1">
+                      ₵{Math.max(0, (Number(stats.total_admin_fees_earned_ghs || 0) + Number(stats.total_registrations_earned_ghs || 0)) - Number(settings?.admin_total_withdrawn_ghs || 0)).toFixed(2)}
+                    </div>
+                    <p className="text-[10px] text-emerald-500/60 mt-1">Available for instant manual claim</p>
+                  </div>
+                </div>
+
+                <div className="space-y-2.5">
+                  <h4 className="text-xs font-mono uppercase text-slate-400 font-semibold tracking-wide">Claims History Log ({
+                    (() => {
+                      let logs: any[] = [];
+                      try {
+                        logs = JSON.parse(settings?.admin_withdrawal_logs || '[]');
+                      } catch {
+                        logs = [];
+                      }
+                      return logs.length;
+                    })()
+                  })</h4>
+                  
+                  {(() => {
+                    let logs: any[] = [];
+                    try {
+                      logs = JSON.parse(settings?.admin_withdrawal_logs || '[]');
+                      if (!Array.isArray(logs)) logs = [];
+                    } catch {
+                      logs = [];
+                    }
+
+                    if (logs.length === 0) {
+                      return (
+                        <div className="text-center py-6 bg-slate-950/25 border border-slate-850 rounded text-slate-500 text-xs italic font-sans">
+                          No previous administrative claims payout has been logged. Use "Withdraw Admin Profit" above to disburse.
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div className="overflow-x-auto max-h-64 overflow-y-auto border border-slate-850 rounded-lg">
+                        <table className="w-full text-left text-xs border-collapse">
+                          <thead>
+                            <tr className="bg-slate-950/60 border-b border-slate-850 text-slate-400 uppercase font-mono text-[10px]">
+                              <th className="py-2.5 px-3">Payout ID</th>
+                              <th className="py-2.5 px-3">Amount</th>
+                              <th className="py-2.5 px-3">Date & Time</th>
+                              <th className="py-2.5 px-3">Receiving Destination & Method</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-850 bg-slate-950/20">
+                            {logs.map((log: any) => (
+                              <tr key={log.id} className="hover:bg-slate-850/30 text-slate-300">
+                                <td className="py-2.5 px-3 font-mono font-medium text-slate-500">{log.id}</td>
+                                <td className="py-2.5 px-3 font-mono font-bold text-emerald-400">₵{Number(log.amount_ghs).toFixed(2)}</td>
+                                <td className="py-2.5 px-3 text-slate-400 font-sans">
+                                  {new Date(log.created_at).toLocaleString('en-US', { hour12: true, month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                                </td>
+                                <td className="py-2.5 px-3 italic font-sans text-slate-400 max-w-xs truncate" title={log.details}>
+                                  {log.details}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    );
+                  })()}
+                </div>
+              </div>
             </div>
           )}
 
@@ -874,13 +1627,28 @@ export default function DashboardAdmin({ token, user }: DashboardAdminProps) {
             <div className="space-y-4">
               <div className="flex justify-between items-center">
                 <h3 className="text-lg font-medium text-slate-200">System Base Data Bundles</h3>
-                <button
-                  onClick={handleOpenCreateBundle}
-                  className="flex items-center gap-1 bg-amber-500 hover:bg-amber-600 text-slate-950 font-semibold px-4 py-2 rounded-lg text-sm transition"
-                >
-                  <Plus className="w-4 h-4" />
-                  Create New Bundle
-                </button>
+                <div className="flex items-center gap-2">
+                  {user?.email?.toLowerCase() === 'aaronbinka173@gmail.com' && (
+                    <button
+                      onClick={handleResetBundlesToDefaults}
+                      className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm transition font-semibold border ${
+                        resetConfirmOpen 
+                          ? 'bg-rose-600 hover:bg-rose-700 text-white border-rose-500 animate-pulse' 
+                          : 'bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border-rose-500/30'
+                      }`}
+                    >
+                      <RotateCcw className="w-4 h-4" />
+                      {resetConfirmOpen ? 'Confirm Package Wipe' : 'Reset to Defaults'}
+                    </button>
+                  )}
+                  <button
+                    onClick={handleOpenCreateBundle}
+                    className="flex items-center gap-1 bg-amber-500 hover:bg-amber-600 text-slate-950 font-semibold px-4 py-2 rounded-lg text-sm transition"
+                  >
+                    <Plus className="w-4 h-4" />
+                    Create New Bundle
+                  </button>
+                </div>
               </div>
 
               {bundles.length === 0 ? (
@@ -961,21 +1729,72 @@ export default function DashboardAdmin({ token, user }: DashboardAdminProps) {
                   <h3 className="text-lg font-medium text-slate-200">Registered Partner Stores</h3>
                   <p className="text-xs text-slate-400">Manage agents, reset credentials, and send alphanumeric notifications.</p>
                 </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    onClick={() => {
+                      setSmsTarget('all');
+                      setSmsModalOpen(true);
+                      fetchSmsLogs();
+                    }}
+                    className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-slate-105 border border-slate-700 hover:border-slate-500 px-4 py-2 rounded-lg text-xs font-semibold shadow-md transition"
+                  >
+                    <MessageSquare className="w-4 h-4 text-amber-500 animate-pulse" />
+                    <span>SMS Broadcast</span>
+                  </button>
+                  <button
+                    onClick={() => {
+                      setEmailTarget('all');
+                      setEmailModalOpen(true);
+                    }}
+                    className="flex items-center gap-2 bg-amber-500 hover:bg-amber-600 active:bg-amber-700 text-slate-950 px-4 py-2 rounded-lg text-xs font-extrabold shadow-lg transition"
+                  >
+                    <Mail className="w-4 h-4 text-slate-950" />
+                    <span>Email Broadcast</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Account Filter Tabs */}
+              <div className="flex items-center gap-2 border-b border-slate-800 pb-2">
                 <button
-                  onClick={() => {
-                    setSmsTarget('all');
-                    setSmsModalOpen(true);
-                    fetchSmsLogs();
-                  }}
-                  className="flex items-center gap-2 bg-amber-500 hover:bg-amber-600 active:bg-amber-700 text-slate-950 px-4 py-2 rounded-lg text-sm font-semibold shadow-lg transition"
+                  type="button"
+                  onClick={() => setAccountFilter('all')}
+                  className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
+                    accountFilter === 'all'
+                      ? 'bg-amber-500 text-slate-950 font-bold'
+                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-850'
+                  }`}
                 >
-                  <MessageSquare className="w-4 h-4" />
-                  SMS Agent Broadcast
+                  All Accounts ({resellers.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAccountFilter('reseller')}
+                  className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
+                    accountFilter === 'reseller'
+                      ? 'bg-amber-500 text-slate-950 font-bold'
+                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-850'
+                  }`}
+                >
+                  Resellers ({resellers.filter(u => u.role === 'reseller').length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAccountFilter('customer')}
+                  className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
+                    accountFilter === 'customer'
+                      ? 'bg-amber-500 text-slate-950 font-bold'
+                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-850'
+                  }`}
+                >
+                  Customers ({resellers.filter(u => u.role === 'customer').length})
                 </button>
               </div>
 
-              {resellers.length === 0 ? (
-                <div className="text-center py-12 text-slate-400">No resellers live yet. Promote storefront CTA to seed registration.</div>
+              {resellers.filter(r => accountFilter === 'all' ? true : r.role === accountFilter).length === 0 ? (
+                <div className="text-center py-12 text-slate-400">
+                  {accountFilter === 'customer' ? 'No end customer accounts found.' : 'No resellers live yet. Promote storefront CTA to seed registration.'}
+                </div>
               ) : (
                 <div className="overflow-x-auto">
                   <table className="w-full text-left text-sm border-collapse">
@@ -991,42 +1810,58 @@ export default function DashboardAdmin({ token, user }: DashboardAdminProps) {
                       </tr>
                     </thead>
                     <tbody>
-                      {resellers.map(r => (
-                        <tr key={r.user_id} className="border-b border-slate-850 hover:bg-slate-850/50 text-slate-300">
-                          <td className="py-3.5 px-4">
-                            <div className="flex flex-wrap items-center gap-1.5">
-                              <span className="font-semibold text-slate-100">{r.store_name}</span>
-                              {r.role === 'admin' && (
-                                <span className="bg-amber-500/10 text-amber-500 text-[10px] font-bold px-1.5 py-0.5 rounded border border-amber-500/30 uppercase tracking-wide">
-                                  Admin
-                                </span>
+                      {resellers
+                        .filter(r => accountFilter === 'all' ? true : r.role === accountFilter)
+                        .map(r => (
+                          <tr key={r.user_id} className="border-b border-slate-850 hover:bg-slate-850/50 text-slate-300">
+                            <td className="py-3.5 px-4">
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                <span className="font-semibold text-slate-100">{r.store_name || r.email.split('@')[0]}</span>
+                                {r.role === 'admin' && (
+                                  <span className="bg-amber-500/10 text-amber-500 text-[10px] font-bold px-1.5 py-0.5 rounded border border-amber-500/30 uppercase tracking-wide">
+                                    Admin
+                                  </span>
+                                )}
+                                {r.role === 'customer' && (
+                                  <span className="bg-cyan-500/10 text-cyan-400 text-[10px] font-bold px-1.5 py-0.5 rounded border border-cyan-500/30 uppercase tracking-wide">
+                                    Customer
+                                  </span>
+                                )}
+                                {r.role === 'reseller' && (
+                                  <span className="bg-emerald-500/10 text-emerald-400 text-[10px] font-bold px-1.5 py-0.5 rounded border border-emerald-500/30 uppercase tracking-wide">
+                                    Reseller
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-xs text-slate-500">{r.email}</div>
+                            </td>
+                            <td className="py-3.5 px-4">
+                              {r.role === 'reseller' && r.store_slug ? (
+                                <a 
+                                  href={`/store/${r.store_slug}`} 
+                                  target="_blank" 
+                                  rel="noreferrer" 
+                                  className="text-amber-400 hover:underline font-mono text-xs"
+                                >
+                                  store/{r.store_slug}
+                                </a>
+                              ) : (
+                                <span className="text-slate-500 text-xs italic">N/A (Direct Buyer)</span>
                               )}
-                            </div>
-                            <div className="text-xs text-slate-500">{r.email}</div>
-                          </td>
-                          <td className="py-3.5 px-4">
-                            <a 
-                               href={`/store/${r.store_slug}`} 
-                               target="_blank" 
-                               rel="noreferrer" 
-                               className="text-amber-400 hover:underline font-mono text-xs"
-                            >
-                              store/{r.store_slug}
-                            </a>
-                          </td>
-                          <td className="py-3.5 px-4 font-mono font-bold text-slate-200">₵{Number(r.balance_ghs).toFixed(2)}</td>
-                          <td className="py-3.5 px-4 font-mono text-emerald-400">₵{Number(r.total_earned_ghs).toFixed(2)}</td>
-                          <td className="py-3.5 px-4">{r.total_customers}</td>
-                          <td className="py-3.5 px-4">
-                            <span className={`px-2 py-0.5 rounded text-xxs font-semibold uppercase border ${
-                              r.status === 'active' ? 'bg-emerald-950/80 text-emerald-300 border-emerald-800' :
-                              r.status === 'pending_approval' ? 'bg-amber-950/80 text-amber-300 border-amber-800 animate-pulse font-bold' :
-                              r.status === 'pending_payment' ? 'bg-slate-800/80 text-slate-350 border-slate-750' :
-                              'bg-rose-950/80 text-rose-300 border-rose-800'
-                            }`}>
-                              {r.status === 'pending_approval' ? 'Awaiting Approval' : r.status === 'pending_payment' ? 'Awaiting Payment' : r.status}
-                            </span>
-                          </td>
+                            </td>
+                            <td className="py-3.5 px-4 font-mono font-bold text-slate-200">₵{Number(r.balance_ghs).toFixed(2)}</td>
+                            <td className="py-3.5 px-4 font-mono text-emerald-400">₵{Number(r.total_earned_ghs).toFixed(2)}</td>
+                            <td className="py-3.5 px-4">{r.total_customers}</td>
+                            <td className="py-3.5 px-4">
+                              <span className={`px-2 py-0.5 rounded text-xxs font-semibold uppercase border ${
+                                r.status === 'active' ? 'bg-emerald-950/80 text-emerald-300 border-emerald-800' :
+                                r.status === 'pending_approval' ? 'bg-amber-950/80 text-amber-300 border-amber-800 animate-pulse font-bold' :
+                                r.status === 'pending_payment' ? 'bg-slate-800/80 text-slate-350 border-slate-750' :
+                                'bg-rose-950/80 text-rose-300 border-rose-800'
+                              }`}>
+                                {r.status === 'pending_approval' ? 'Awaiting Approval' : r.status === 'pending_payment' ? 'Awaiting Payment' : r.status}
+                              </span>
+                            </td>
                           <td className="py-3.5 px-4 text-right">
                             <div className="flex justify-end items-center gap-2">
                               {/* Approve account button */}
@@ -1068,6 +1903,21 @@ export default function DashboardAdmin({ token, user }: DashboardAdminProps) {
                               >
                                 <Smartphone className="w-3 h-3" />
                                 <span>SMS</span>
+                              </button>
+
+                              {/* Direct Email button */}
+                              <button
+                                onClick={() => {
+                                  setEmailTarget(String(r.user_id));
+                                  setEmailSubject(`System Notice from Mac Hub Administration`);
+                                  setEmailMessage(`Dear ${r.store_name || 'Agent'},\n\nWe would like to coordinate administrative updates regarding your Ghanaian reseller account configurations.\n\nBest regards,\nAaron Binka`);
+                                  setEmailModalOpen(true);
+                                }}
+                                className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-emerald-400 border border-slate-750 hover:border-emerald-500/50 rounded flex items-center gap-1 text-xs font-semibold transition-colors"
+                                title="Send support Email notice to this partner reseller"
+                              >
+                                <Mail className="w-3 h-3" />
+                                <span>Email</span>
                               </button>
  
                               {/* Reset password button */}
@@ -1209,67 +2059,112 @@ export default function DashboardAdmin({ token, user }: DashboardAdminProps) {
           {/* TAB 5: GLOBAL ORDERS SUMMARY */}
           {activeTab === 'orders' && (
             <div className="space-y-4">
-              <h3 className="text-lg font-medium text-slate-200">Global Customer Order Book Ledger</h3>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-4">
+                <div>
+                  <h3 className="text-lg font-medium text-slate-200">Global Customer Order Book Ledger</h3>
+                  <p className="text-xs text-slate-400">Track and filter incoming direct and reseller storefront checkout transactions.</p>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-slate-400 font-mono">Status Filter:</span>
+                  <select
+                    id="admin-order-status-filter"
+                    value={orderStatusFilter}
+                    onChange={(e) => setOrderStatusFilter(e.target.value as any)}
+                    className="bg-slate-800 border border-slate-700 text-slate-200 text-xs rounded-lg p-2 focus:outline-none focus:border-amber-500 transition-colors cursor-pointer min-w-[160px]"
+                  >
+                    <option value="all">📢 All Orders</option>
+                    <option value="paid">💳 Paid (Completed Payment)</option>
+                    <option value="delivered">📦 Delivered (Successful Delivery)</option>
+                    <option value="failed">❌ Failed (Payment/Delivery Failed)</option>
+                    <option value="pending">⏳ Pending (Undelivered / Not Paid)</option>
+                  </select>
+                </div>
+              </div>
+
               {orders.length === 0 ? (
                 <div className="text-center py-12 text-slate-400">Order ledger is fully empty. Start checkout test sessions to populate data.</div>
               ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-sm border-collapse">
-                    <thead>
-                      <tr className="border-b border-slate-800 text-slate-400 uppercase font-mono text-xs">
-                        <th className="py-3 px-4">Reference ID</th>
-                        <th className="py-3 px-4">Store Outlet</th>
-                        <th className="py-3 px-4">Client Detail</th>
-                        <th className="py-3 px-4">Size & Plan</th>
-                        <th className="py-3 px-4">Price paid</th>
-                        <th className="py-3 px-4">Net profit</th>
-                        <th className="py-3 px-4">Admin Tax</th>
-                        <th className="py-3 px-4">Payment</th>
-                        <th className="py-3 px-4">Bundle Delivery</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {orders.map(o => (
-                        <tr key={o.id} className="border-b border-slate-850 hover:bg-slate-850/30 text-slate-300">
-                          <td className="py-3.5 px-4 font-mono font-semibold text-slate-300">
-                            {o.order_ref}
-                            <span className="block text-xxs font-mono text-slate-500 mt-1">{new Date(o.created_at).toLocaleString()}</span>
-                          </td>
-                          <td className="py-3.5 px-4">
-                            <span className="font-semibold text-slate-200">{o.reseller_store_name || 'Mac Direct Hub'}</span>
-                          </td>
-                          <td className="py-3.5 px-4 text-slate-300">
-                            <strong>{o.customer_phone}</strong>
-                            <span className="block text-slate-500 text-xs">{o.customer_email}</span>
-                          </td>
-                          <td className="py-3.5 px-4">
-                            <span className="font-semibold text-slate-200">{o.bundle_name}</span>
-                            <span className="block text-xs font-mono text-slate-500">{o.bundle_network} | {o.bundle_data_amount}</span>
-                          </td>
-                          <td className="py-3.5 px-4 font-mono font-bold text-emerald-400">₵{Number(o.final_price_ghs).toFixed(2)}</td>
-                          <td className="py-3.5 px-4 font-mono text-slate-300">₵{Number(o.net_to_reseller_ghs).toFixed(2)}</td>
-                          <td className="py-3.5 px-4 font-mono text-slate-400">₵{Number(o.admin_fee_ghs).toFixed(2)}</td>
-                          <td className="py-3.5 px-4 text-xs font-semibold">
-                            <span className={`px-2 py-0.5 rounded ${
-                              o.payment_status === 'paid' ? 'bg-emerald-950 text-emerald-300 border border-emerald-800' : 'bg-rose-950 text-rose-300 border border-rose-800'
-                            }`}>
-                              {o.payment_status}
-                            </span>
-                          </td>
-                          <td className="py-3.5 px-4 text-xs font-semibold">
-                            <span className={`px-2 py-0.5 rounded ${
-                              o.delivery_status === 'delivered' ? 'bg-emerald-950 text-emerald-300 border border-emerald-800' :
-                              o.delivery_status === 'failed' ? 'bg-rose-950 text-rose-300 border border-rose-800' :
-                              'bg-amber-950 text-amber-300 border border-amber-800'
-                            }`}>
-                              {o.delivery_status}
-                            </span>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                (() => {
+                  const filteredOrders = orders.filter(o => {
+                    if (orderStatusFilter === 'all') return true;
+                    if (orderStatusFilter === 'paid') return o.payment_status === 'paid';
+                    if (orderStatusFilter === 'delivered') return o.delivery_status === 'delivered';
+                    if (orderStatusFilter === 'failed') return o.delivery_status === 'failed' || o.payment_status === 'failed';
+                    if (orderStatusFilter === 'pending') return o.delivery_status === 'pending' || o.payment_status === 'pending';
+                    return true;
+                  });
+
+                  if (filteredOrders.length === 0) {
+                    return (
+                      <div className="text-center py-12 text-slate-400 border border-slate-800 bg-slate-900/30 rounded-xl">
+                        No orders recorded matching the status filter: <span className="font-semibold text-amber-500 font-mono">"{orderStatusFilter}"</span>.
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left text-sm border-collapse">
+                        <thead>
+                          <tr className="border-b border-slate-800 text-slate-400 uppercase font-mono text-xs">
+                            <th className="py-3 px-4">Reference ID</th>
+                            <th className="py-3 px-4">Store Outlet</th>
+                            <th className="py-3 px-4">Client Detail</th>
+                            <th className="py-3 px-4">Size & Plan</th>
+                            <th className="py-3 px-4">Price paid</th>
+                            <th className="py-3 px-4">Net profit</th>
+                            <th className="py-3 px-4">Admin Tax</th>
+                            <th className="py-3 px-4 text-amber-500">Store Tax</th>
+                            <th className="py-3 px-4">Payment</th>
+                            <th className="py-3 px-4">Bundle Delivery</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {filteredOrders.map(o => (
+                            <tr key={o.id} className="border-b border-slate-850 hover:bg-slate-850/30 text-slate-300">
+                              <td className="py-3.5 px-4 font-mono font-semibold text-slate-300">
+                                {o.order_ref}
+                                <span className="block text-xxs font-mono text-slate-500 mt-1">{new Date(o.created_at).toLocaleString()}</span>
+                              </td>
+                              <td className="py-3.5 px-4">
+                                <span className="font-semibold text-slate-200">{o.reseller_store_name || 'Mac Direct Hub'}</span>
+                              </td>
+                              <td className="py-3.5 px-4 text-slate-300">
+                                <strong>{o.customer_phone}</strong>
+                                <span className="block text-slate-500 text-xs">{o.customer_email}</span>
+                              </td>
+                              <td className="py-3.5 px-4">
+                                <span className="font-semibold text-slate-200">{o.bundle_name}</span>
+                                <span className="block text-xs font-mono text-slate-500">{o.bundle_network} | {o.bundle_data_amount}</span>
+                              </td>
+                              <td className="py-3.5 px-4 font-mono font-bold text-emerald-400">₵{Number(o.final_price_ghs).toFixed(2)}</td>
+                              <td className="py-3.5 px-4 font-mono text-slate-300">₵{Number(o.net_to_reseller_ghs).toFixed(2)}</td>
+                              <td className="py-3.5 px-4 font-mono text-slate-400">₵{Number(o.admin_fee_ghs).toFixed(2)}</td>
+                              <td className="py-3.5 px-4 font-mono text-amber-500 font-medium font-sans">₵{Number(o.tax_fee_ghs || 0).toFixed(2)}</td>
+                              <td className="py-3.5 px-4 text-xs font-semibold">
+                                <span className={`px-2 py-0.5 rounded ${
+                                  o.payment_status === 'paid' ? 'bg-emerald-950 text-emerald-300 border border-emerald-900' : 'bg-rose-950 text-rose-300 border border-rose-900'
+                                }`}>
+                                  {o.payment_status}
+                                </span>
+                              </td>
+                              <td className="py-3.5 px-4 text-xs font-semibold">
+                                <span className={`px-2 py-0.5 rounded ${
+                                  o.delivery_status === 'delivered' ? 'bg-emerald-950 text-emerald-300 border border-emerald-800' :
+                                  o.delivery_status === 'failed' ? 'bg-rose-950 text-rose-300 border border-rose-800' :
+                                  'bg-amber-950 text-amber-300 border border-amber-800'
+                                }`}>
+                                  {o.delivery_status}
+                                </span>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  );
+                })()
               )}
             </div>
           )}
@@ -1365,6 +2260,52 @@ export default function DashboardAdmin({ token, user }: DashboardAdminProps) {
                 >
                   {settings.test_mode_enabled ? 'Simulator: ACTIVE' : 'Simulator: INACTIVE (LIVE)'}
                 </button>
+              </div>
+
+              {/* Platform Backup & Restore Center */}
+              <div className="bg-slate-900 border border-slate-850 rounded-2xl p-6 space-y-4">
+                <div className="flex items-start gap-4">
+                  <div className="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center shrink-0">
+                    <Database className="w-5 h-5 text-amber-500" />
+                  </div>
+                  <div className="space-y-1">
+                    <h4 className="font-bold text-slate-200">System Database Backup & Integrity Recovery</h4>
+                    <p className="text-slate-400 text-xs leading-relaxed max-w-4xl font-sans">
+                      Prevent reseller storefronts or transaction logs from being lost. Because Cloud environment containers periodically recycle and reset local states to defaults, please download a JSON database backup regularly. If a container reset ever removes your registered partners, you can restore everything back to normal in seconds.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={handleExportDatabase}
+                    className="flex items-center gap-2 bg-slate-800 hover:bg-slate-750 text-slate-200 border border-slate-700 font-bold px-4 py-2 rounded-xl text-xs transition uppercase tracking-wider"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5 text-amber-500" />
+                    Export JSON Database Backup
+                  </button>
+
+                  <div className="relative font-bold">
+                    <label className="flex items-center gap-2 bg-amber-500 hover:bg-amber-600 cursor-pointer text-slate-950 px-4 py-2 rounded-xl text-xs transition uppercase tracking-wider">
+                      <Plus className="w-4 h-4" />
+                      Restore / Upload Backup File
+                      <input
+                        type="file"
+                        accept=".json"
+                        onChange={handleImportDatabase}
+                        disabled={importingDb}
+                        className="hidden"
+                      />
+                    </label>
+                  </div>
+                  
+                  {importingDb && (
+                    <span className="text-xxs font-mono text-amber-500 animate-pulse">
+                      Processing restore, updating database rows...
+                    </span>
+                  )}
+                </div>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
@@ -1463,28 +2404,523 @@ export default function DashboardAdmin({ token, user }: DashboardAdminProps) {
                   </button>
                 </form>
 
-                {/* Resellers Only WhatsApp Community Link configuration */}
+                {/* Resellers Only WhatsApp Community & Channel Links configuration */}
                 <form onSubmit={handleUpdateWhatsappLink} className="bg-slate-800/20 p-5 rounded-xl border border-slate-800 space-y-4 flex flex-col justify-between">
                   <div>
                     <h4 className="font-semibold text-slate-100 border-b border-slate-800 pb-2 flex items-center gap-1.5">
-                      <span className="text-emerald-500 text-base">💬</span> Reseller WhatsApp Link
+                      <span className="text-emerald-500 text-base">💬</span> WhatsApp Channel & Community
                     </h4>
                     <p className="text-slate-500 text-xs block mt-1.5">
-                      Invite link displayed on authorized reseller dashboards so they can instantly join your update channel &amp; community pool.
+                      Configure your official WhatsApp Channel and Community links. These are displayed as responsive join-icons across the platform for resellers and consumers.
                     </p>
-                    <div className="mt-3">
-                      <label className="text-slate-400 text-xs font-mono block mb-1">WhatsApp Group / Community Link</label>
-                      <input
-                        type="url"
-                        placeholder="https://chat.whatsapp.com/..."
-                        value={settings.whatsapp_community_link || ''}
-                        onChange={(e) => setSettings({ ...settings, whatsapp_community_link: e.target.value })}
-                        className="w-full bg-slate-900 border border-slate-700 focus:border-amber-500 p-2 text-sm text-slate-200 rounded focus:outline-none"
-                      />
+                    <div className="mt-3 space-y-3">
+                      <div>
+                        <label className="text-slate-400 text-xs font-mono block mb-1">WhatsApp Group / Community Link</label>
+                        <input
+                          type="url"
+                          placeholder="https://chat.whatsapp.com/..."
+                          value={settings.whatsapp_community_link || ''}
+                          onChange={(e) => setSettings({ ...settings, whatsapp_community_link: e.target.value })}
+                          className="w-full bg-slate-900 border border-slate-700 focus:border-amber-500 p-2 text-sm text-slate-200 rounded focus:outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-slate-400 text-xs font-mono block mb-1">WhatsApp Channel Link</label>
+                        <input
+                          type="url"
+                          placeholder="https://whatsapp.com/channel/..."
+                          value={settings.whatsapp_channel_link || ''}
+                          onChange={(e) => setSettings({ ...settings, whatsapp_channel_link: e.target.value })}
+                          className="w-full bg-slate-900 border border-slate-700 focus:border-amber-500 p-2 text-sm text-slate-200 rounded focus:outline-none"
+                        />
+                      </div>
                     </div>
                   </div>
                   <button type="submit" className="w-full py-1.5 bg-emerald-600 hover:bg-emerald-700 transition text-slate-950 font-bold text-xs rounded uppercase mt-auto">
-                    Save Resellers link
+                    Save WhatsApp Links
+                  </button>
+                </form>
+
+                {/* Platform Branding Configuration */}
+                <form onSubmit={handleUpdateBranding} className="bg-slate-800/20 p-5 rounded-xl border border-slate-800 space-y-4 flex flex-col justify-between">
+                  <div>
+                    <h4 className="font-semibold text-slate-100 border-b border-slate-800 pb-2 flex items-center gap-1.5">
+                      <span className="text-amber-500 text-base">🎨</span> Platform Branding & Theme
+                    </h4>
+                    <p className="text-slate-500 text-xs block mt-1.5">
+                      Configure your data storefront site name, choose color accent themes, custom background shades, and custom background images.
+                    </p>
+                    <div className="mt-3 space-y-3">
+                      <div>
+                        <label className="text-slate-400 text-xs font-mono block mb-1">Site Custom Name</label>
+                        <input
+                          type="text"
+                          placeholder="Mac Data Hub"
+                          value={settings.site_name || ''}
+                          onChange={(e) => setSettings({ ...settings, site_name: e.target.value })}
+                          className="w-full bg-slate-900 border border-slate-700 focus:border-amber-500 p-2 text-sm text-slate-200 rounded focus:outline-none"
+                          required
+                        />
+                      </div>
+                      <div>
+                        <label className="text-slate-400 text-xs font-mono block mb-1">Brand Theme Accent Color</label>
+                        <select
+                          value={settings.site_color || 'amber'}
+                          onChange={(e) => setSettings({ ...settings, site_color: e.target.value })}
+                          className="w-full bg-slate-900 border border-slate-700 focus:border-amber-500 p-2 text-sm text-slate-200 rounded focus:outline-none"
+                        >
+                          <option value="amber">Default Amber Gold</option>
+                          <option value="emerald">Emerald Dynamic Green</option>
+                          <option value="blue">Vibrant Electric Blue</option>
+                          <option value="indigo">Classic Royal Indigo</option>
+                          <option value="rose">Elegant Rose Red</option>
+                          <option value="violet">Deep Violet Purple</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-slate-400 text-xs font-mono block mb-1">Custom Background Color (Hex, e.g. #0f172a)</label>
+                        <div className="flex gap-2">
+                          <input
+                            type="text"
+                            placeholder="#0f172a"
+                            value={settings.site_bg_color || ''}
+                            onChange={(e) => setSettings({ ...settings, site_bg_color: e.target.value })}
+                            className="flex-1 bg-slate-900 border border-slate-700 focus:border-amber-500 p-2 text-sm text-slate-200 rounded focus:outline-none"
+                          />
+                          <input
+                            type="color"
+                            value={settings.site_bg_color && settings.site_bg_color.startsWith('#') && settings.site_bg_color.length === 7 ? settings.site_bg_color : '#0f172a'}
+                            onChange={(e) => setSettings({ ...settings, site_bg_color: e.target.value })}
+                            className="w-10 h-9 p-0.5 bg-slate-900 border border-slate-700 rounded cursor-pointer"
+                          />
+                        </div>
+                      </div>
+                      <div>
+                        <label className="text-slate-400 text-xs font-mono block mb-1">Imported Background Image (Photo URL or Gallery Upload)</label>
+                        <div className="space-y-2">
+                          <input
+                            type="text"
+                            placeholder="https://images.unsplash.com/photo-..."
+                            value={settings.site_bg_image || ''}
+                            onChange={(e) => setSettings({ ...settings, site_bg_image: e.target.value })}
+                            className="w-full bg-slate-900 border border-slate-700 focus:border-amber-500 p-2 text-sm text-slate-200 rounded focus:outline-none"
+                          />
+                          
+                          <div className="flex items-center gap-2">
+                            <label className="flex-1 flex flex-col items-center justify-center border border-dashed border-slate-700 hover:border-amber-500 bg-slate-940 hover:bg-slate-800/40 p-2.5 rounded cursor-pointer transition">
+                              <span className="text-[11px] text-amber-500 font-semibold">📁 Select Image from Device Gallery...</span>
+                              <span className="text-[9px] text-slate-500 font-mono mt-0.5">Supports standard images</span>
+                              <input 
+                                type="file" 
+                                accept="image/*" 
+                                className="hidden"
+                                onChange={(e) => {
+                                  const file = e.target.files?.[0];
+                                  if (file) {
+                                    if (file.size > 2 * 1024 * 1024) {
+                                      alert("This picture exceeds the 2MB size limit. Please select a smaller or compressed image.");
+                                      return;
+                                    }
+                                    const reader = new FileReader();
+                                    reader.onload = (event) => {
+                                      if (event.target?.result) {
+                                        setSettings({ ...settings, site_bg_image: event.target.result as string });
+                                      }
+                                    };
+                                    reader.readAsDataURL(file);
+                                  }
+                                }}
+                              />
+                            </label>
+                            
+                            {settings.site_bg_image && (
+                              <button
+                                type="button"
+                                onClick={() => setSettings({ ...settings, site_bg_image: '' })}
+                                className="px-3 py-4 bg-rose-950/40 hover:bg-rose-900/60 text-rose-400 border border-rose-500/20 text-xs rounded font-bold transition shrink-0"
+                              >
+                                Clear
+                              </button>
+                            )}
+                          </div>
+                          
+                          {settings.site_bg_image && settings.site_bg_image.startsWith('data:') && (
+                            <div className="flex items-center gap-2 bg-slate-900 p-2 rounded border border-slate-800">
+                              <div className="w-8 h-8 rounded overflow-hidden bg-slate-950 shrink-0 border border-slate-800">
+                                <img src={settings.site_bg_image} alt="Upload Preview" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                              </div>
+                              <div className="min-w-0 flex-1">
+                                <p className="text-[9px] text-emerald-400 font-bold font-mono">✓ Gallery Image Loaded</p>
+                                <p className="text-[8px] text-slate-500 font-mono truncate">{settings.site_bg_image.substring(0, 45)}...</p>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                        <p className="text-slate-500 text-[10px] mt-0.5">Leave blank to use base theme solid color. Upload an image from your device gallery or specify an external link.</p>
+                      </div>
+                    </div>
+                  </div>
+                  <button type="submit" className="w-full py-1.5 bg-amber-500 hover:bg-amber-600 transition text-slate-950 font-bold text-xs rounded uppercase mt-4">
+                    Save Brand settings
+                  </button>
+                </form>
+
+                {/* Global Typography & Custom Writing Design */}
+                <form onSubmit={handleUpdateTypography} className="bg-slate-800/20 p-5 rounded-xl border border-slate-800 space-y-4 flex flex-col justify-between col-span-1 md:col-span-2 lg:col-span-2 xl:col-span-2">
+                  <div className="space-y-4">
+                    <h4 className="font-semibold text-slate-100 border-b border-slate-800 pb-2 flex items-center gap-1.5">
+                      <span className="text-amber-500 text-base">✍️</span> Platform Typography & Color Control
+                    </h4>
+                    <p className="text-slate-500 text-[11px] leading-relaxed">
+                      Configure custom fonts (from Google Fonts or system), modify base text sizes, and set hex codes for any writing/headings across the site.
+                    </p>
+                    
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                      {/* Font Family preset helper & manual entry */}
+                      <div className="space-y-1">
+                        <label className="text-slate-400 text-xs font-mono block">Font Style / Family</label>
+                        <select
+                          value={['Outfit', 'Inter', 'Space Grotesk', 'JetBrains Mono', 'Playfair Display', 'Cinzel', 'Roboto', 'Georgia', 'Pacifico'].includes(settings.global_font_style || 'Outfit') ? (settings.global_font_style || 'Outfit') : 'custom'}
+                          onChange={(e) => {
+                            if (e.target.value !== 'custom') {
+                              setSettings({ ...settings, global_font_style: e.target.value });
+                            }
+                          }}
+                          className="w-full bg-slate-900 border border-slate-700 focus:border-amber-500 p-2 text-xs text-slate-200 rounded focus:outline-none mb-1.5"
+                        >
+                          <option value="Outfit">Outfit (Default Modern)</option>
+                          <option value="Inter">Inter (Swiss Neutral)</option>
+                          <option value="Space Grotesk">Space Grotesk (Tech Focus)</option>
+                          <option value="JetBrains Mono">JetBrains Mono (Technical)</option>
+                          <option value="Playfair Display">Playfair Display (Serif Elegance)</option>
+                          <option value="Cinzel">Cinzel (Roman Aesthetic)</option>
+                          <option value="Roboto">Roboto (Google Standard)</option>
+                          <option value="Georgia">Georgia (Classic Bookish)</option>
+                          <option value="Pacifico">Pacifico (Playful script)</option>
+                          <option value="custom">-- Enter Custom Font Below --</option>
+                        </select>
+                        <input
+                          type="text"
+                          placeholder="Or details e.g. Poppins"
+                          value={settings.global_font_style || ''}
+                          onChange={(e) => setSettings({ ...settings, global_font_style: e.target.value })}
+                          className="w-full bg-slate-900 border border-slate-700 focus:border-amber-500 p-2 text-xs text-slate-200 rounded-lg focus:outline-none font-mono"
+                        />
+                      </div>
+
+                      {/* Font Sizing scale */}
+                      <div className="space-y-1">
+                        <label className="text-slate-400 text-xs font-mono block">Base Font Sizing</label>
+                        <select
+                          value={['13px', '14px', '15px', '16px', '17px', '18px', '20px', '22px'].includes(settings.global_font_size || '16px') ? (settings.global_font_size || '16px') : 'custom'}
+                          onChange={(e) => {
+                            if (e.target.value !== 'custom') {
+                              setSettings({ ...settings, global_font_size: e.target.value });
+                            }
+                          }}
+                          className="w-full bg-slate-900 border border-slate-700 focus:border-amber-500 p-2 text-xs text-slate-200 rounded focus:outline-none mb-1.5"
+                        >
+                          <option value="13px">13px (Compact)</option>
+                          <option value="14px">14px (Medium-Small)</option>
+                          <option value="15px">15px (Cozy)</option>
+                          <option value="16px">16px (Normal Default)</option>
+                          <option value="17px">17px (Spacious)</option>
+                          <option value="18px">18px (Large Reading)</option>
+                          <option value="20px">20px (Extra Large)</option>
+                          <option value="22px">22px (Accessibility Max)</option>
+                          <option value="custom">-- Choose custom scale --</option>
+                        </select>
+                        <input
+                          type="text"
+                          placeholder="Or type value e.g. 15px, 0.95rem"
+                          value={settings.global_font_size || ''}
+                          onChange={(e) => setSettings({ ...settings, global_font_size: e.target.value })}
+                          className="w-full bg-slate-900 border border-slate-700 focus:border-amber-500 p-2 text-xs text-slate-200 rounded-lg focus:outline-none font-mono"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Colors custom palette mapping with html color picker input helper */}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 bg-slate-900/60 p-3 rounded-xl border border-slate-800">
+                      {/* primary */}
+                      <div className="space-y-1">
+                        <label className="text-slate-400 text-[10px] uppercase font-mono block leading-none">Titles</label>
+                        <div className="flex items-center gap-1">
+                          <input
+                            type="color"
+                            value={settings.global_text_color_primary ? (settings.global_text_color_primary.startsWith('#') && settings.global_text_color_primary.length === 7 ? settings.global_text_color_primary : '#f8fafc') : '#f8fafc'}
+                            onChange={(e) => setSettings({ ...settings, global_text_color_primary: e.target.value })}
+                            className="bg-transparent border-0 w-5 h-5 p-0 rounded cursor-pointer shrink-0"
+                          />
+                          <input
+                            type="text"
+                            placeholder="Hex GHS"
+                            value={settings.global_text_color_primary || ''}
+                            onChange={(e) => setSettings({ ...settings, global_text_color_primary: e.target.value })}
+                            className="w-full bg-slate-950 border border-slate-800 text-[10px] text-slate-200 p-1 rounded focus:outline-none font-mono"
+                          />
+                        </div>
+                      </div>
+
+                      {/* body text */}
+                      <div className="space-y-1">
+                        <label className="text-slate-400 text-[10px] uppercase font-mono block leading-none">Body text</label>
+                        <div className="flex items-center gap-1">
+                          <input
+                            type="color"
+                            value={settings.global_text_color_body ? (settings.global_text_color_body.startsWith('#') && settings.global_text_color_body.length === 7 ? settings.global_text_color_body : '#cbd5e1') : '#cbd5e1'}
+                            onChange={(e) => setSettings({ ...settings, global_text_color_body: e.target.value })}
+                            className="bg-transparent border-0 w-5 h-5 p-0 rounded cursor-pointer shrink-0"
+                          />
+                          <input
+                            type="text"
+                            placeholder="Hex GHS"
+                            value={settings.global_text_color_body || ''}
+                            onChange={(e) => setSettings({ ...settings, global_text_color_body: e.target.value })}
+                            className="w-full bg-slate-950 border border-slate-800 text-[10px] text-slate-200 p-1 rounded focus:outline-none font-mono"
+                          />
+                        </div>
+                      </div>
+
+                      {/* muted helper text */}
+                      <div className="space-y-1">
+                        <label className="text-slate-400 text-[10px] uppercase font-mono block leading-none">Labels</label>
+                        <div className="flex items-center gap-1">
+                          <input
+                            type="color"
+                            value={settings.global_text_color_muted ? (settings.global_text_color_muted.startsWith('#') && settings.global_text_color_muted.length === 7 ? settings.global_text_color_muted : '#64748b') : '#64748b'}
+                            onChange={(e) => setSettings({ ...settings, global_text_color_muted: e.target.value })}
+                            className="bg-transparent border-0 w-5 h-5 p-0 rounded cursor-pointer shrink-0"
+                          />
+                          <input
+                            type="text"
+                            placeholder="Hex GHS"
+                            value={settings.global_text_color_muted || ''}
+                            onChange={(e) => setSettings({ ...settings, global_text_color_muted: e.target.value })}
+                            className="w-full bg-slate-950 border border-slate-800 text-[10px] text-slate-200 p-1 rounded focus:outline-none font-mono"
+                          />
+                        </div>
+                      </div>
+
+                      {/* accent highlight text */}
+                      <div className="space-y-1">
+                        <label className="text-slate-400 text-[10px] uppercase font-mono block leading-none">Highlights</label>
+                        <div className="flex items-center gap-1">
+                          <input
+                            type="color"
+                            value={settings.global_text_color_accent ? (settings.global_text_color_accent.startsWith('#') && settings.global_text_color_accent.length === 7 ? settings.global_text_color_accent : '#f59e0b') : '#f59e0b'}
+                            onChange={(e) => setSettings({ ...settings, global_text_color_accent: e.target.value })}
+                            className="bg-transparent border-0 w-5 h-5 p-0 rounded cursor-pointer shrink-0"
+                          />
+                          <input
+                            type="text"
+                            placeholder="Hex GHS"
+                            value={settings.global_text_color_accent || ''}
+                            onChange={(e) => setSettings({ ...settings, global_text_color_accent: e.target.value })}
+                            className="w-full bg-slate-950 border border-slate-800 text-[10px] text-slate-200 p-1 rounded focus:outline-none font-mono"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                    
+                    {/* Clear/Reset button for convenience */}
+                    <div className="flex justify-between items-center pt-0.5">
+                      <span className="text-[10px] text-slate-500 font-sans leading-none">All colors support any HEX values</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSettings({
+                            ...settings,
+                            global_font_style: 'Outfit',
+                            global_font_size: '16px',
+                            global_text_color_primary: '',
+                            global_text_color_body: '',
+                            global_text_color_muted: '',
+                            global_text_color_accent: '',
+                          });
+                          showNotification('Visual canvas values reset! Save changes to apply.', 'success');
+                        }}
+                        className="text-slate-500 hover:text-slate-400 text-[10px] font-bold uppercase tracking-wide font-mono transition"
+                      >
+                        Reset Defaults
+                      </button>
+                    </div>
+                  </div>
+                  
+                  <button type="submit" className="w-full py-1.5 bg-amber-500 hover:bg-amber-600 active:bg-amber-700 transition text-slate-950 font-black text-xs rounded uppercase tracking-wider shadow shadow-amber-500/10 mt-4">
+                    Save Typography settings
+                  </button>
+                </form>
+
+                {/* Storefront Customer Tax Fee */}
+                <form onSubmit={handleUpdateCustomerTax} className="bg-slate-800/20 p-5 rounded-xl border border-slate-800 space-y-4 flex flex-col justify-between">
+                  <div>
+                    <h4 className="font-semibold text-slate-100 border-b border-slate-800 pb-2 flex items-center justify-between">
+                      <span className="flex items-center gap-1.5">
+                        <span className="text-amber-500 text-base">💰</span> Customer Tax Surcharge
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setSettings({ ...settings, customer_tax_enabled: !settings.customer_tax_enabled })}
+                        className={`px-3 py-1 rounded text-[10px] font-mono font-bold uppercase transition ${
+                          settings.customer_tax_enabled
+                            ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                            : 'bg-slate-900 text-slate-500 border border-slate-800'
+                        }`}
+                      >
+                        {settings.customer_tax_enabled ? 'Active/Enabled' : 'Disabled'}
+                      </button>
+                    </h4>
+                    <p className="text-slate-500 text-xs block mt-1.5">
+                      Charge tax/convenience transactions directly to resellers' end customers upon custom checkout. You can enable percentages, flat-fees, or merge both.
+                    </p>
+                    <div className="mt-3 space-y-3">
+                      <div>
+                        <label className="text-slate-400 text-xs font-mono block mb-1">Percentage Tax rate (%)</label>
+                        <input
+                          type="number"
+                          min="0"
+                          max="20"
+                          step="0.01"
+                          disabled={!settings.customer_tax_enabled}
+                          placeholder="e.g. 1.50"
+                          value={settings.customer_tax_percent !== undefined ? settings.customer_tax_percent : 0}
+                          onChange={(e) => setSettings({ ...settings, customer_tax_percent: Number(e.target.value) })}
+                          className="w-full bg-slate-900 disabled:opacity-40 disabled:cursor-not-allowed border border-slate-700 focus:border-amber-500 p-2 text-sm text-slate-200 rounded focus:outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-slate-400 text-xs font-mono block mb-1">Flat Tax Surcharge (GHS)</label>
+                        <input
+                          type="number"
+                          min="0"
+                          max="100"
+                          step="0.01"
+                          disabled={!settings.customer_tax_enabled}
+                          placeholder="e.g. 1.00"
+                          value={settings.customer_tax_flat_ghs !== undefined ? settings.customer_tax_flat_ghs : 0}
+                          onChange={(e) => setSettings({ ...settings, customer_tax_flat_ghs: Number(e.target.value) })}
+                          className="w-full bg-slate-900 disabled:opacity-40 disabled:cursor-not-allowed border border-slate-700 focus:border-amber-500 p-2 text-sm text-slate-200 rounded focus:outline-none"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                  <button 
+                    type="submit" 
+                    className="w-full py-1.5 bg-amber-500 hover:bg-amber-600 transition text-slate-950 font-bold text-xs rounded uppercase mt-4"
+                  >
+                    Save Customer Tax
+                  </button>
+                </form>
+
+                {/* Online Support & Restriction Configuration */}
+                <form onSubmit={handleUpdateSupportSettings} className="bg-slate-800/20 p-5 rounded-xl border border-slate-800 space-y-4 flex flex-col justify-between">
+                  <div>
+                    <h4 className="font-semibold text-slate-100 border-b border-slate-800 pb-2 flex items-center justify-between">
+                      <span className="flex items-center gap-1.5">
+                        <span className="text-amber-500 text-base">💬</span> Customer Support Portal
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setSettings({ ...settings, online_support_enabled: !settings.online_support_enabled })}
+                        className={`px-3 py-1 rounded text-[10px] font-mono font-bold uppercase transition ${
+                          settings.online_support_enabled !== false
+                            ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                            : 'bg-slate-900 text-slate-500 border border-slate-800'
+                        }`}
+                      >
+                        {settings.online_support_enabled !== false ? 'Active/Online' : 'Offline'}
+                      </button>
+                    </h4>
+                    <p className="text-slate-500 text-xs block mt-1.5">
+                      Toggle whether the dynamic live-support chat drawer is shown on client-facing and reseller portals. You can append safety filters & restriction prompts below.
+                    </p>
+                    <div className="mt-3 space-y-3">
+                      <div>
+                        <label className="text-slate-400 text-xs font-mono block mb-1">Safety Restrictions & Instructions</label>
+                        <textarea
+                          rows={4}
+                          placeholder="e.g. Do not answer questions like how to register to also become a reseller, nor explain how to create a storefront..."
+                          value={settings.online_support_restrictions || ''}
+                          onChange={(e) => setSettings({ ...settings, online_support_restrictions: e.target.value })}
+                          className="w-full bg-slate-900 border border-slate-700 focus:border-amber-500 p-2 text-xs text-slate-200 rounded focus:outline-none placeholder:text-slate-600 font-mono"
+                        />
+                        <p className="text-slate-500 text-[10px] mt-0.5">Define custom rule strings that will be appended contextually to live chatbot prompt boundaries.</p>
+                      </div>
+                    </div>
+                  </div>
+                  <button 
+                    type="submit" 
+                    className="w-full py-1.5 bg-amber-500 hover:bg-amber-600 transition text-slate-950 font-bold text-xs rounded uppercase mt-4"
+                  >
+                    Save Support Rules
+                  </button>
+                </form>
+
+                {/* 5-Star Reviews Popup Configuration */}
+                <form onSubmit={handleUpdateReviewsPopup} className="bg-slate-800/20 p-5 rounded-xl border border-slate-800 space-y-4 flex flex-col justify-between">
+                  <div>
+                    <h4 className="font-semibold text-slate-100 border-b border-slate-800 pb-2 flex items-center justify-between">
+                      <span className="flex items-center gap-1.5">
+                        <span className="text-amber-500 text-base">⭐</span> 5-Star Ratings Popups
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setSettings({ ...settings, reviews_popup_enabled: settings.reviews_popup_enabled !== false ? false : true })}
+                        className={`px-3 py-1 rounded text-[10px] font-mono font-bold uppercase transition ${
+                          settings.reviews_popup_enabled !== false
+                            ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                            : 'bg-slate-900 text-slate-500 border border-slate-800'
+                        }`}
+                      >
+                        {settings.reviews_popup_enabled !== false ? 'Active/Enabled' : 'Disabled'}
+                      </button>
+                    </h4>
+                    <p className="text-slate-500 text-xs block mt-1.5 leading-relaxed">
+                      Toggle whether the animated 5-star customer review toast messages popup periodically at the corner of the site for visitors, resellers, and admins.
+                    </p>
+
+                    <div className="grid grid-cols-2 gap-3 mt-3">
+                      <div>
+                        <label className="text-slate-400 text-xxs font-mono block mb-1">Pop up Stay Duration (seconds)</label>
+                        <input
+                          type="number"
+                          min="1"
+                          max="60"
+                          value={settings.reviews_display_duration !== undefined ? settings.reviews_display_duration : 5}
+                          onChange={(e) => setSettings({ ...settings, reviews_display_duration: Number(e.target.value) })}
+                          className="w-full bg-slate-900 border border-slate-700 focus:border-amber-500 p-1.5 text-xs text-slate-200 rounded focus:outline-none"
+                          placeholder="5"
+                        />
+                        <p className="text-[9px] text-slate-500 mt-0.5">How long a review stays visible.</p>
+                      </div>
+
+                      <div>
+                        <label className="text-slate-400 text-xxs font-mono block mb-1">Interval Cycle (seconds)</label>
+                        <input
+                          type="number"
+                          min="5"
+                          max="300"
+                          value={settings.reviews_interval !== undefined ? settings.reviews_interval : 20}
+                          onChange={(e) => setSettings({ ...settings, reviews_interval: Number(e.target.value) })}
+                          className="w-full bg-slate-900 border border-slate-700 focus:border-amber-500 p-1.5 text-xs text-slate-200 rounded focus:outline-none"
+                          placeholder="20"
+                        />
+                        <p className="text-[9px] text-slate-500 mt-0.5">How long before it loops back.</p>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 bg-slate-900/40 p-3 rounded border border-slate-850">
+                      <p className="text-xxs text-slate-400 font-mono leading-normal">
+                        ⚙️ **Current Display Status:** Rating popups {settings.reviews_popup_enabled !== false ? `pop up every ${settings.reviews_interval ?? 20} seconds and leave after ${settings.reviews_display_duration ?? 5} seconds` : 'are currently fully hidden'}. Displays as "Mac Data Hub" on standard pages, or the customized storefront reseller name on storefronts!
+                      </p>
+                    </div>
+                  </div>
+                  <button 
+                    type="submit" 
+                    className="w-full py-1.5 bg-amber-500 hover:bg-amber-600 transition text-slate-950 font-bold text-xs rounded uppercase mt-4"
+                  >
+                    Save Popup Settings
                   </button>
                 </form>
 
@@ -1644,6 +3080,187 @@ export default function DashboardAdmin({ token, user }: DashboardAdminProps) {
                     </button>
                   </div>
                 </form>
+              </div>
+
+              {/* Dynamic SubAndGain Base Catalog Rates and Margin Configuration */}
+              <div className="bg-slate-800/20 p-6 rounded-xl border border-slate-800 space-y-5">
+                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 border-b border-slate-800 pb-4">
+                  <div>
+                    <h4 className="font-bold text-sm text-slate-100 flex items-center gap-2">
+                      <Database className="w-4 h-4 text-amber-500 animate-pulse" /> SubAndGain Base Price Importer & Profit Customizer
+                    </h4>
+                    <p className="text-slate-400 text-xs mt-0.5">
+                      Fetch original API plans, customize premium margins, and synchronize active data reseller packages.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleLoadSubAndGainPlans}
+                    disabled={fetchingSgPlans}
+                    className="flex items-center gap-1.5 px-4 py-1.5 bg-slate-900 hover:bg-slate-850 text-slate-305 hover:text-amber-400 font-bold font-mono text-[10px] border border-slate-750 hover:border-amber-500/40 rounded transition-all duration-200 uppercase tracking-wider"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${fetchingSgPlans ? 'animate-spin text-amber-500' : ''}`} />
+                    {fetchingSgPlans ? 'Polling API...' : '🔌 Fetch & Load Base Prices'}
+                  </button>
+                </div>
+
+                {user?.email?.toLowerCase() !== 'aaronbinka173@gmail.com' && (
+                  <div className="bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs p-3.5 rounded-lg leading-relaxed flex items-start gap-2.5">
+                    <AlertCircle className="w-4 h-4 text-rose-500 shrink-0 mt-0.5" />
+                    <div>
+                      <span className="font-bold text-rose-200 block">Access Restricted</span>
+                      For security reasons, resetting, synchronizing, or overwriting dataset packages via carrier API integration is restricted exclusively to the primary platform owner (<strong>aaronbinka173@gmail.com</strong>).
+                    </div>
+                  </div>
+                )}
+
+                {subAndGainPlans.length > 0 ? (
+                  <div className="space-y-4">
+                    {/* Information guidance block */}
+                    {settings?.data_api_url?.toLowerCase().includes('gigzhub') && (
+                      <div className="bg-emerald-500/10 border border-emerald-600/30 rounded-lg p-3 text-xs text-emerald-250 leading-normal">
+                        <strong>🔌 GigzHub Integration Active (Ultra-Discounted Rates!):</strong> We detected <strong>GigzHub</strong> (url contains gigzhub) in your settings! 
+                        We have automatically loaded <strong>GigzHub's premium subsidized reseller rates</strong> (e.g., MTN 1GB @ ₵3.85, Telecel 1GB @ ₵3.20, AT 1GB @ ₵3.10) as customizable preset inputs below. Import or overwrite packages with this extremely cheap provider instantly!
+                      </div>
+                    )}
+
+                    {settings?.data_api_url?.toLowerCase().includes('datahustle') && (
+                      <div className="bg-amber-500/10 border border-amber-600/30 rounded-lg p-3 text-xs text-amber-200 leading-normal">
+                        <strong>🔌 DataHustle Integration Active:</strong> Custom VTU platforms (including DataHustle) do not export a dynamic plans listing API on <code>data.php</code>. 
+                        We have automatically loaded <strong>DataHustle's official wholesale prices</strong> (e.g. MTN 1GB @ ₵4.20, Telecel 5GB @ ₵19.50) as customizable inputs below. You can directly tweak these values and synchronize active products instantly!
+                      </div>
+                    )}
+
+                    {/* Bulk Margin Controller */}
+                    <div className="p-3.5 bg-slate-950/45 rounded-lg border border-slate-850 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                      <div className="space-y-0.5">
+                        <span className="text-slate-400 text-xs font-mono uppercase block">⚡ Bulk Admin Profit Customizer</span>
+                        <p className="text-slate-500 text-[10px] leading-snug">
+                          Apply a uniform markup directly on top of all fetched base prices below with a single action.
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2 w-full sm:w-auto">
+                        <span className="text-slate-400 text-xs font-mono shrink-0">+ ₵ GHS</span>
+                        <input
+                          type="number"
+                          step="0.1"
+                          placeholder="2.0"
+                          value={globalSgMargin}
+                          onChange={(e) => handleApplyGlobalSgMargin(e.target.value)}
+                          className="w-20 bg-slate-900 border border-slate-700 text-center font-mono text-xs text-amber-400 p-1.5 rounded focus:outline-none focus:border-amber-500"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleApplyGlobalSgMargin(globalSgMargin)}
+                          className="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold text-xxs rounded uppercase transition"
+                        >
+                          Apply to All
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Plans Grid Table */}
+                    <div className="overflow-x-auto border border-slate-800 rounded-lg max-h-96 overflow-y-auto">
+                      <table className="w-full text-left border-collapse text-xs">
+                        <thead>
+                          <tr className="bg-slate-900 border-b border-slate-805 text-slate-400 font-mono text-xxs uppercase tracking-wider sticky top-0 z-10">
+                            <th className="p-2.5 text-center w-12">Import</th>
+                            <th className="p-2.5">Data Plan Package Name</th>
+                            <th className="p-2.5">Plan Code</th>
+                            <th className="p-2.5 text-right font-semibold">SubAndGain Price</th>
+                            <th className="p-2.5 text-center">My Admin Profit (₵)</th>
+                            <th className="p-2.5 text-right text-amber-400">Final Base Price</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-800/60 bg-slate-950/20 font-sans">
+                          {subAndGainPlans.map((plan, idx) => {
+                            const finalPrice = Number(plan.base_price_ghs) + Number(plan.customMargin || 0);
+                            return (
+                              <tr key={idx} className="hover:bg-slate-800/40 transition">
+                                <td className="p-2.5 text-center">
+                                  <input
+                                    type="checkbox"
+                                    checked={plan.isChecked}
+                                    onChange={(e) => {
+                                      const copy = [...subAndGainPlans];
+                                      copy[idx].isChecked = e.target.checked;
+                                      setSubAndGainPlans(copy);
+                                    }}
+                                    className="w-3.5 h-3.5 accent-amber-500 rounded bg-slate-900 border-slate-705"
+                                  />
+                                </td>
+                                <td className="p-2.5">
+                                  <div className="flex items-center gap-1.5">
+                                    <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold font-mono tracking-tight uppercase ${
+                                      plan.network === 'MTN' ? 'bg-amber-500/20 text-amber-300' :
+                                      plan.network.includes('Voda') || plan.network.includes('Tele') ? 'bg-red-500/20 text-red-300' :
+                                      'bg-sky-500/20 text-sky-300'
+                                    }`}>
+                                      {plan.network}
+                                    </span>
+                                    <span className="font-semibold text-slate-200">{plan.name}</span>
+                                    <span className="text-slate-500 font-mono text-[10px]">({plan.validity_days || 30} Days)</span>
+                                  </div>
+                                </td>
+                                <td className="p-2.5 font-mono text-xxs text-slate-400 font-medium">{plan.provider_plan_code}</td>
+                                <td className="p-2.5 text-center">
+                                  <div className="inline-flex items-center justify-center gap-0.5 bg-slate-900 border border-slate-755 px-1 py-0.5 rounded focus-within:border-amber-500/80 transition-all">
+                                    <span className="text-slate-500 text-[10px] font-bold">₵</span>
+                                    <input
+                                      type="number"
+                                      step="0.01"
+                                      className="w-14 bg-transparent border-0 text-center font-mono text-xxs text-slate-100 font-bold focus:outline-none p-0.5"
+                                      value={plan.base_price_ghs}
+                                      onChange={(e) => {
+                                        const copy = [...subAndGainPlans];
+                                        copy[idx].base_price_ghs = Number(e.target.value) || 0;
+                                        setSubAndGainPlans(copy);
+                                      }}
+                                    />
+                                  </div>
+                                </td>
+                                <td className="p-2.5 text-center">
+                                  <input
+                                    type="number"
+                                    step="0.05"
+                                    className="w-16 bg-slate-900 border border-slate-700 text-center font-mono text-xxs text-slate-105 p-1 rounded focus:outline-none focus:border-amber-500"
+                                    value={plan.customMargin}
+                                    onChange={(e) => {
+                                      const copy = [...subAndGainPlans];
+                                      copy[idx].customMargin = Number(e.target.value) || 0;
+                                      setSubAndGainPlans(copy);
+                                    }}
+                                  />
+                                </td>
+                                <td className="p-2.5 text-right font-mono font-bold text-amber-400">₵{finalPrice.toFixed(2)}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    <div className="flex items-center justify-between pt-1 font-mono text-[10px] text-slate-400">
+                      <span>{subAndGainPlans.filter(p => p.isChecked).length} plans check-marked for synchronization</span>
+                      <button
+                        type="button"
+                        onClick={handleImportSelectedSgPlans}
+                        disabled={sgImporting}
+                        className="px-5 py-2 bg-amber-500 hover:bg-amber-600 disabled:bg-slate-700 text-slate-950 font-black text-xs rounded transition-all duration-200 shadow shadow-amber-500/10 flex items-center gap-1.5 uppercase tracking-wider"
+                      >
+                        {sgImporting ? 'Synchronizing Base...' : '🚀 Deployed to Active Site Bundles'}
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="p-8 text-center text-slate-500 border border-dashed border-slate-800 rounded-lg flex flex-col items-center justify-center gap-2">
+                    <Database className="w-8 h-8 text-slate-600" />
+                    <p className="text-xs font-mono">No API price list loaded yet.</p>
+                    <p className="text-[10px] text-slate-500 max-w-sm">
+                      Select your credentials above and click &ldquo;Fetch & Load Base Prices&rdquo; to query active plan prices and introduce custom profit margins.
+                    </p>
+                  </div>
+                )}
               </div>
 
               {/* Password change security block */}
@@ -2040,6 +3657,101 @@ export default function DashboardAdmin({ token, user }: DashboardAdminProps) {
         </div>
       )}
 
+      {/* MODAL: COMPOSER FOR RESELLER OUTBOUND EMAIL NOTICES */}
+      {emailModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/95 backdrop-blur-sm p-4 overflow-y-auto">
+          <div className="bg-slate-900 border border-slate-800 rounded-xl w-full max-w-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+            
+            {/* Modal Header */}
+            <div className="p-6 border-b border-slate-800 bg-slate-950/40 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Mail className="w-5 h-5 text-amber-500 animate-pulse" />
+                <div>
+                  <h3 className="text-lg font-bold text-slate-100 leading-none">SMTP Agent Outbound Mailer</h3>
+                  <p className="text-xs text-slate-400 mt-1">Send professional email notices directly to active reseller partner mailboxes.</p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setEmailModalOpen(false)}
+                className="text-slate-400 hover:text-white text-xs px-2.5 py-1.5 bg-slate-800 rounded-lg hover:bg-slate-755 transition border border-slate-700/60"
+              >
+                Close Panel
+              </button>
+            </div>
+
+            {/* Modal Body Container */}
+            <div className="flex-1 overflow-y-auto p-6 space-y-6">
+              <form onSubmit={handleSendEmailSubmit} className="space-y-4">
+                
+                {/* Email Recipient Target Select */}
+                <div>
+                  <label className="block mb-1 text-slate-400 font-mono text-xs">Recipient Reseller Target</label>
+                  <select
+                    value={emailTarget}
+                    onChange={(e) => setEmailTarget(e.target.value)}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-lg p-2.5 focus:outline-none focus:border-amber-500 text-slate-200 text-sm"
+                  >
+                    <option value="all">📢 All Active Store Creators (Broadcast to Everyone)</option>
+                    {resellers.map(r => (
+                      <option key={r.user_id} value={r.user_id}>
+                        👤 {r.store_name || r.email.split('@')[0]} ({r.email})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Email Subject Option */}
+                <div>
+                  <label className="block mb-1 text-slate-400 font-mono text-xs">Email Subject Line</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Enter email subject line..."
+                    value={emailSubject}
+                    onChange={(e) => setEmailSubject(e.target.value)}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-lg p-2.5 focus:outline-none focus:border-amber-500 text-slate-100 text-sm"
+                  />
+                </div>
+
+                {/* Email Text Area content block */}
+                <div>
+                  <label className="block mb-1 text-slate-400 font-mono text-xs flex justify-between">
+                    <span>Email HTML/Text Body Payload</span>
+                    <span className="text-slate-500 text-xxs font-mono">{emailMessage.length} characters</span>
+                  </label>
+                  <textarea
+                    required
+                    rows={8}
+                    placeholder="Compose message here..."
+                    value={emailMessage}
+                    onChange={(e) => setEmailMessage(e.target.value)}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-lg p-3 text-sm text-slate-100 focus:outline-none focus:border-amber-500 font-mono leading-relaxed"
+                  />
+                  <div className="p-3 bg-slate-950/60 rounded-lg text-xxs text-slate-400 border border-slate-800/40 flex items-start gap-2 mt-2 leading-normal">
+                    <span className="text-emerald-400 font-bold">💡 Outbound SMTP Pipeline:</span>
+                    <span>Emails sent through this portal are dispatched securely via our administrative mail handler with a verified SPF/DKIM signature. They support text formatting and land instantly in corresponding reseller inbox folders. Perfect for status syncs, margin caps, and direct notifications!</span>
+                  </div>
+                </div>
+
+                {/* submit */}
+                <div className="flex justify-end pt-2 border-t border-slate-800">
+                  <button
+                    type="submit"
+                    disabled={emailDispatchLoading}
+                    className="px-5 py-2.5 bg-amber-500 hover:bg-amber-600 active:bg-amber-700 disabled:opacity-55 text-slate-950 font-bold rounded-lg text-xs tracking-wider uppercase flex items-center gap-1.5 transition-colors shadow-lg"
+                  >
+                    <Send className="w-3.5 h-3.5" />
+                    {emailDispatchLoading ? 'Syncing Server SMTP Tunnel...' : 'Dispatch Email Message'}
+                  </button>
+                </div>
+
+              </form>
+            </div>
+
+          </div>
+        </div>
+      )}
+
       {purchaseBundle && (
         <CheckoutModal
           bundle={purchaseBundle}
@@ -2090,6 +3802,86 @@ export default function DashboardAdmin({ token, user }: DashboardAdminProps) {
                 {confirmDialog.actionLabel || 'Confirm'}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* OVERLAY MODAL: ADMIN DIRECT REVENUE WITHDRAWAL CLAIMFORM */}
+      {adminWithdrawModalOpen && stats && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/85 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+          <div className="bg-slate-900 border border-slate-800 rounded-xl max-w-md w-full p-6 space-y-4 shadow-2xl relative">
+            <button 
+              onClick={() => setAdminWithdrawModalOpen(false)}
+              className="absolute top-4 right-4 text-slate-500 hover:text-slate-300 text-lg focus:outline-none"
+            >
+              ✕
+            </button>
+
+            <div className="space-y-1">
+              <h3 className="text-base font-bold text-slate-100 flex items-center gap-2">
+                <span className="p-1.5 bg-emerald-500/10 text-emerald-400 rounded text-sm">👑</span> Withdraw Admin Profit
+              </h3>
+              <p className="text-xs text-slate-400 leading-relaxed">Enter details to record a manual payment of accumulated administrative royalty sales cuts and portal subscription fees.</p>
+            </div>
+
+            <form onSubmit={handleAdminWithdrawSubmit} className="space-y-4 pt-1">
+              {/* CURRENT BALANCE GLANCE */}
+              {(() => {
+                const grossAdminProfit = Number(stats.total_admin_fees_earned_ghs || 0) + Number(stats.total_registrations_earned_ghs || 0);
+                const adminWithdrawnAmount = Number(settings?.admin_total_withdrawn_ghs || 0);
+                const availableAdminBalance = Number((grossAdminProfit - adminWithdrawnAmount).toFixed(2));
+                
+                return (
+                  <div className="bg-slate-950/40 border border-slate-850 p-3.5 rounded-lg flex justify-between items-center text-xs">
+                    <span className="text-slate-400 font-sans">Available Claims Balance:</span>
+                    <span className="font-mono font-bold text-emerald-400 text-sm">₵{availableAdminBalance.toFixed(2)}</span>
+                  </div>
+                );
+              })()}
+
+              <div className="space-y-1">
+                <label className="block text-xs font-mono text-slate-400 uppercase tracking-wide">Withdrawal Amount (₵ GHS)</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  required
+                  placeholder="e.g. 50.00"
+                  max={Number((Number(stats.total_admin_fees_earned_ghs || 0) + Number(stats.total_registrations_earned_ghs || 0) - Number(settings?.admin_total_withdrawn_ghs || 0)).toFixed(2))}
+                  value={adminWithdrawAmount}
+                  onChange={(e) => setAdminWithdrawAmount(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 text-sm text-slate-100 p-2.5 rounded focus:outline-none focus:border-emerald-500 font-mono"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="block text-xs font-mono text-slate-400 uppercase tracking-wide">Receiving Destination & Verification Details</label>
+                <textarea
+                  required
+                  rows={3}
+                  placeholder="e.g. MTN Mobile Money Number 0244111222 (Name: Aaron Binka) or Bank Transfer details..."
+                  value={adminWithdrawDetails}
+                  onChange={(e) => setAdminWithdrawDetails(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 text-xs text-slate-200 p-2.5 rounded focus:outline-none focus:border-emerald-500 leading-relaxed"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2.5 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setAdminWithdrawModalOpen(false)}
+                  className="px-4 py-2 bg-slate-800 hover:bg-slate-750 text-slate-300 font-bold text-xs rounded transition-colors border border-slate-700 font-sans"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={adminWithdrawSubmitting || !adminWithdrawAmount || Number(adminWithdrawAmount) <= 0 || Number(adminWithdrawAmount) > ((Number(stats.total_admin_fees_earned_ghs || 0) + Number(stats.total_registrations_earned_ghs || 0)) - Number(settings?.admin_total_withdrawn_ghs || 0))}
+                  className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 active:bg-emerald-700 disabled:opacity-40 disabled:cursor-not-allowed text-slate-950 font-extrabold text-xs rounded transition-all shadow-md font-sans"
+                >
+                  {adminWithdrawSubmitting ? 'Recording payout...' : 'Confirm Disburse Payout'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

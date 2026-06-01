@@ -17,6 +17,13 @@
   --color-slate-200: var(--slate-200);
   --color-slate-100: var(--slate-100);
   --color-slate-50: var(--slate-50);
+
+  --color-amber-400: var(--accent-400);
+  --color-amber-500: var(--accent-500);
+  --color-amber-600: var(--accent-600);
+  --color-amber-700: var(--accent-700);
+  --color-amber-800: var(--accent-800);
+  --color-amber-950: var(--accent-950);
 }
 
 :root {
@@ -32,6 +39,68 @@
   --slate-200: #cbd5e1;
   --slate-100: #f8fafc;
   --slate-50: #f8fafc;
+
+  --accent-400: #fbbf24;
+  --accent-500: #f59e0b;
+  --accent-600: #d97706;
+  --accent-700: #b45309;
+  --accent-800: #92400e;
+  --accent-950: #451a03;
+}
+
+/* Accent Color Variations classes */
+.theme-emerald {
+  --accent-400: #34d399; /* emerald-400 */
+  --accent-500: #10b981; /* emerald-500 */
+  --accent-600: #059669; /* emerald-600 */
+  --accent-700: #047857; /* emerald-700 */
+  --accent-800: #065f46; /* emerald-800 */
+  --accent-950: #022c22; /* emerald-950 */
+}
+
+.theme-blue {
+  --accent-400: #60a5fa; /* blue-400 */
+  --accent-500: #3b82f6; /* blue-500 */
+  --accent-600: #2563eb; /* blue-600 */
+  --accent-700: #1d4ed8; /* blue-700 */
+  --accent-800: #1e40af; /* blue-800 */
+  --accent-950: #172554; /* blue-950 */
+}
+
+.theme-indigo {
+  --accent-400: #818cf8; /* indigo-400 */
+  --accent-500: #6366f1; /* indigo-500 */
+  --accent-600: #4f46e5; /* indigo-600 */
+  --accent-700: #4338ca; /* indigo-700 */
+  --accent-800: #3730a3; /* indigo-800 */
+  --accent-950: #1e1b4b; /* indigo-950 */
+}
+
+.theme-rose {
+  --accent-400: #fb7185; /* rose-400 */
+  --accent-500: #f43f5e; /* rose-500 */
+  --accent-600: #e11d48; /* rose-600 */
+  --accent-700: #be123c; /* rose-700 */
+  --accent-800: #9f1239; /* rose-800 */
+  --accent-950: #4c0519; /* rose-950 */
+}
+
+.theme-violet {
+  --accent-400: #a78bfa; /* violet-400 */
+  --accent-500: #8b5cf6; /* violet-500 */
+  --accent-600: #7c3aed; /* violet-600 */
+  --accent-700: #6d28d9; /* violet-700 */
+  --accent-800: #5b21b6; /* violet-800 */
+  --accent-950: #2e1065; /* violet-950 */
+}
+
+.theme-amber {
+  --accent-400: #fbbf24;
+  --accent-500: #f59e0b;
+  --accent-600: #d97706;
+  --accent-700: #b45309;
+  --accent-800: #92400e;
+  --accent-950: #451a03;
 }
 
 /* Light Mode Overrides */

@@ -129,4 +129,22 @@ export interface AdminSettings {
   data_api_key?: string;
   data_api_url?: string;
   whatsapp_community_link?: string;
+  whatsapp_channel_link?: string;
+  site_name?: string;
+  site_color?: string;
+  global_font_style?: string;
+  global_font_size?: string;
+  global_text_color_primary?: string;
+  global_text_color_body?: string;
+  global_text_color_muted?: string;
+  global_text_color_accent?: string;
+  admin_total_withdrawn_ghs?: number;
+  admin_withdrawal_logs?: string;
+  site_bg_color?: string;
+  site_bg_image?: string;
+  online_support_enabled?: boolean;
+  online_support_restrictions?: string;
+  reviews_popup_enabled?: boolean;
+  reviews_display_duration?: number;
+  reviews_interval?: number;
 }

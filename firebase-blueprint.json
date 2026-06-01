@@ -1,0 +1,207 @@
+{
+  "entities": {
+    "User": {
+      "title": "User Account",
+      "description": "User account registration representing admins, resellers, or end customers",
+      "type": "object",
+      "properties": {
+        "id": { "type": "integer", "description": "Unique auto-incremental identifier" },
+        "email": { "type": "string", "description": "LOWERCASE email address of user" },
+        "password_hash": { "type": "string", "description": "Bcrypt hashed password" },
+        "role": { "type": "string", "enum": ["admin", "reseller", "customer"], "description": "Authentication capability level of the user" },
+        "status": { "type": "string", "enum": ["active", "pending_payment", "pending_approval", "suspended"], "description": "Operational state of the account" },
+        "store_name": { "type": "string", "description": "Store branding name for storefront resellers" },
+        "store_slug": { "type": "string", "description": "Unique URL identifier for resellers" },
+        "phone": { "type": "string", "description": "Mobile money contact phone number" },
+        "registration_fee_paid_ghs": { "type": "number", "description": "How much registration fee was successfully cleared" },
+        "storefront_enabled": { "type": "boolean", "description": "Whether storefront view is accessible to visitors" },
+        "created_at": { "type": "string", "format": "date-time", "description": "Creation timestamp ISO string" }
+      },
+      "required": ["id", "email", "password_hash", "role", "status"]
+    },
+    "Bundle": {
+      "title": "Data Package Bundle",
+      "description": "A specific telecommunications data bundle package available for resale",
+      "type": "object",
+      "properties": {
+        "id": { "type": "integer" },
+        "name": { "type": "string" },
+        "network": { "type": "string" },
+        "data_amount": { "type": "string" },
+        "validity_days": { "type": "integer" },
+        "admin_base_price_ghs": { "type": "number" },
+        "provider_plan_code": { "type": "string" },
+        "status": { "type": "string", "enum": ["active", "disabled"] },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "name", "network", "admin_base_price_ghs", "provider_plan_code", "status"]
+    },
+    "ResellerPricing": {
+      "title": "Custom Reseller Markup Pricing",
+      "description": "Custom markup percentages or fixed fees applied on top of admin base rates by individual resellers",
+      "type": "object",
+      "properties": {
+        "id": { "type": "integer" },
+        "reseller_id": { "type": "integer" },
+        "bundle_id": { "type": "integer" },
+        "markup_type": { "type": "string", "enum": ["fixed", "percentage"] },
+        "markup_value": { "type": "number" },
+        "final_price_ghs": { "type": "number" }
+      },
+      "required": ["id", "reseller_id", "bundle_id", "markup_type", "markup_value", "final_price_ghs"]
+    },
+    "Order": {
+      "title": "Data Order",
+      "description": "Data bundle ordering placement record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "integer" },
+        "order_ref": { "type": "string" },
+        "customer_id": { "type": "integer" },
+        "reseller_id": { "type": "integer" },
+        "bundle_id": { "type": "integer" },
+        "customer_phone": { "type": "string" },
+        "admin_base_price_ghs": { "type": "number" },
+        "reseller_markup_ghs": { "type": "number" },
+        "final_price_ghs": { "type": "number" },
+        "admin_fee_ghs": { "type": "number" },
+        "net_to_reseller_ghs": { "type": "number" },
+        "delivery_status": { "type": "string" },
+        "payment_status": { "type": "string" },
+        "tax_fee_ghs": { "type": "number" },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "order_ref", "bundle_id", "customer_phone", "final_price_ghs", "delivery_status", "payment_status"]
+    },
+    "PaymentLog": {
+      "title": "Payment Record",
+      "description": "Detailed log tracking MoMo/Card paystack webhook or manual receipt processing",
+      "type": "object",
+      "properties": {
+        "id": { "type": "integer" },
+        "order_id": { "type": "integer" },
+        "transaction_ref": { "type": "string" },
+        "provider": { "type": "string" },
+        "amount_ghs": { "type": "number" },
+        "customer_email": { "type": "string" },
+        "customer_phone": { "type": "string" },
+        "status": { "type": "string" },
+        "webhook_payload": { "type": "string" },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "order_id", "transaction_ref", "amount_ghs", "status"]
+    },
+    "ResellerAccount": {
+      "title": "Reseller Wallet Info",
+      "description": "Tracks wallets and total customers active underneath reseller platform index",
+      "type": "object",
+      "properties": {
+        "user_id": { "type": "integer" },
+        "balance_ghs": { "type": "number" },
+        "total_earned_ghs": { "type": "number" },
+        "total_customers": { "type": "integer" },
+        "deduction_source": { "type": "string" }
+      },
+      "required": ["user_id", "balance_ghs", "total_earned_ghs"]
+    },
+    "WithdrawalRequest": {
+      "title": "Withdrawal request",
+      "description": "Payout demands placed by resellers to draw margin earnings into mobile money wallets",
+      "type": "object",
+      "properties": {
+        "id": { "type": "integer" },
+        "reseller_id": { "type": "integer" },
+        "amount_ghs": { "type": "number" },
+        "status": { "type": "string" },
+        "decline_reason": { "type": "string" },
+        "processed_at": { "type": "string" },
+        "fee_ghs": { "type": "number" },
+        "net_amount_ghs": { "type": "number" },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "reseller_id", "amount_ghs", "status"]
+    },
+    "DataDeliveryLog": {
+      "title": "VTU API Gateway Log",
+      "description": "Detailed HTTP requests and body payloads routed outward to SubAndGain/Ghana base providers",
+      "type": "object",
+      "properties": {
+        "id": { "type": "integer" },
+        "order_id": { "type": "integer" },
+        "api_provider": { "type": "string" },
+        "request_payload": { "type": "string" },
+        "response": { "type": "string" },
+        "status": { "type": "string" },
+        "retry_count": { "type": "integer" },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "order_id", "status"]
+    },
+    "AdminSetting": {
+      "title": "System Configuration Value",
+      "description": "Global custom setting values managed by platform administrator",
+      "type": "object",
+      "properties": {
+        "setting_key": { "type": "string" },
+        "setting_value": { "type": "string" }
+      },
+      "required": ["setting_key", "setting_value"]
+    },
+    "SmsLog": {
+      "title": "Outgoing SMS notification",
+      "description": "Broadcast and status updates dispatched to users",
+      "type": "object",
+      "properties": {
+        "id": { "type": "integer" },
+        "reseller_id": { "type": "integer" },
+        "sender_id": { "type": "string" },
+        "message": { "type": "string" },
+        "status": { "type": "string" },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "sender_id", "message", "status"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User accounts collection in Firestore"
+    },
+    "/bundles/{bundleId}": {
+      "schema": "Bundle",
+      "description": "Seeded data bundle packets"
+    },
+    "/reseller_pricing/{pricingId}": {
+      "schema": "ResellerPricing",
+      "description": "Individual markups applied by resellers"
+    },
+    "/orders/{orderId}": {
+      "schema": "Order",
+      "description": "In store order checkout logs"
+    },
+    "/payments/{paymentId}": {
+      "schema": "PaymentLog",
+      "description": "Verification gateway payment transaction records"
+    },
+    "/reseller_accounts/{accountId}": {
+      "schema": "ResellerAccount",
+      "description": "Balance purses associated to resellers"
+    },
+    "/withdrawal_requests/{requestId}": {
+      "schema": "WithdrawalRequest",
+      "description": "Payout files submitted for processing"
+    },
+    "/data_delivery_logs/{logId}": {
+      "schema": "DataDeliveryLog",
+      "description": "API requests processed against outer servers"
+    },
+    "/admin_settings/{settingId}": {
+      "schema": "AdminSetting",
+      "description": "System specific key value items managed by platform administrator"
+    },
+    "/sms_logs/{logId}": {
+      "schema": "SmsLog",
+      "description": "Broadcast SMS messages"
+    }
+  }
+}

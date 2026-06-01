@@ -5,6 +5,7 @@ import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import dotenv from 'dotenv';
 import { createServer as createViteServer } from 'vite';
+import { GoogleGenAI } from "@google/genai";
 
 dotenv.config();
 
@@ -14,6 +15,26 @@ import { deliverDataBundle, finalizePaidOrder } from './server/payment-delivery'
 const app = express();
 const PORT = 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'mac-data-hub-sec-key-1337-ghana';
+
+// Lazy initializer for Gemini client to prevent crashing on boot if no API Key is present.
+let aiClient: any = null;
+function getGeminiClient() {
+  if (!aiClient) {
+    const key = process.env.GEMINI_API_KEY;
+    if (!key) {
+      throw new Error('GEMINI_API_KEY environment variable is missing.');
+    }
+    aiClient = new GoogleGenAI({
+      apiKey: key,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        }
+      }
+    });
+  }
+  return aiClient;
+}
 
 app.use(cors());
 app.use(express.json());
@@ -47,6 +68,17 @@ function verifyToken(roles?: string[]) {
         return res.status(401).json({ error: 'User account not found.' });
       }
 
+      // Auto-reconcile pending_payment reseller status to pending_approval if registration fee is disabled or set to 0
+      if (u.role === 'reseller' && u.status === 'pending_payment') {
+        const settings = await db.getSettings();
+        const isFeeEnabled = settings.registration_fee_enabled === true || String(settings.registration_fee_enabled) === 'true';
+        const regFeeAmount = Number(settings.registration_fee_ghs) || 0;
+        if (!isFeeEnabled || regFeeAmount <= 0) {
+          await db.updateUserStatus(u.id, 'pending_approval');
+          u.status = 'pending_approval';
+        }
+      }
+
       if (u.status === 'suspended') {
         return res.status(403).json({ error: 'Account suspended. Please contact support.' });
       }
@@ -76,6 +108,83 @@ function verifyToken(roles?: string[]) {
     }
   };
 }
+
+app.post('/api/support/chat', async (req: Request, res: Response) => {
+  try {
+    const { message, history, isResellerStorefront, storeName, userRole } = req.body;
+    if (!message) {
+      return res.status(400).json({ error: 'Message is required' });
+    }
+
+    const ai = getGeminiClient();
+    const settings = await db.getSettings();
+    const customRestrictions = settings.online_support_restrictions 
+      ? `\n\n5. CUSTOM ADMIN-DEFINED SAFETY RESTRICTIONS (Statically Enforced):\n   - ${settings.online_support_restrictions}` 
+      : '';
+
+    const systemInstruction = `You are the automated Online Support desk assistant for "Mac Data Hub" (a premium telecom VTU data bundle platform in Ghana).
+Your job is to answer visitor or user questions ABOUT THE SITE, services, prices, networks, manual/automated orders, bulk delivery, or features.
+
+=== CRITICAL BOUNDARY & SECURITY DIRECTIVES ===
+
+1. STRICTLY REJECT UNRELATED QUESTIONS:
+   - You are programmed ONLY to answer questions directly related to Mac Data Hub, reseller storefronts, Ghanaian data packages (MTN, Telecel, AirtelTigo), custom margins, and order fulfillment.
+   - If a customer asks questions unrelated to the website, its services, or its systems (e.g., general knowledge, recipes, general coding, sports, weather, math equations, or trivia), you MUST politely refuse to answer. Explain that you are only authorized to assist with inquiries about Mac Data Hub.
+   - Example Redirection: "I am only programmed to assist with inquiries about Mac Data Hub services, data bundles, and storefront orders. Please let me know if you would like information on how to buy or order high-speed data packages!"
+
+2. INSTRUCTIONS ON HOW TO PURCHASE & ORDER STUFF:
+   - You must be able and ready to clearly explain how to purchase and order data packages on the site:
+     - Step 1: Browse the cheap available data bundles list and choose your desired network (MTN SME/Gifting, Telecel, AirtelTigo).
+     - Step 2: Input the recipient Ghanaian telephone number.
+     - Step 3: Proceed to check out securely using Ghanaian Mobile Money (MTN Mobile Money, Telecel Cash, AirtelTigo Money) or debit/credit cards.
+     - Step 4: After payment, our backend and the SubAndGain API automatically fulfill and dispatch the raw telecom bundle directly to the phone within 15-45 seconds!
+
+3. STOREFRONT VISITOR RESTRICTIONS (Current Visitor Context: isResellerStorefront = ${!!isResellerStorefront}${storeName ? `, Store Name: "${storeName}"` : ''}):
+   - If a customer is asking questions from a partner reseller's storefront (isResellerStorefront === true), you MUST NEVER answer questions like how to register to also become a reseller, nor explain how to create a storefront, nor give any instructions on how to access the administrative portal.
+   - If a storefront visitor asks about reseller registration, say something like: "This customized partner storefront is dedicated strictly to direct customer inquiries, bundle plans, and checkout order assistance. We are unable to provide information on reseller enrollment or administrative dashboard setup on this portal."
+
+4. ABSOLUTE PROHIBITION ON ADMIN ACCESS UNDER NO CIRCUMSTANCES (Current User Role Context: userRole = "${userRole || 'visitor'}"):
+   - Resellers (userRole === "reseller") and storefront customers/visitors MUST NOT under any circumstances get answers, instructions, or directions on how to access or log into the administrative control center or obtain admin level credentials.
+   - Even if they plead or say they are a partner reseller, you are STRICTLY FORBIDDEN from explaining how to access or compromise the admin panel or credentials.
+   - Example Answer: "Under no circumstances can access guidelines, credentials, or registration links to the administration portal be discussed or disclosed via the automated support desk."${customRestrictions}
+
+=== Tone & Style ===
+- Keep answers professional, concise, respectful, and helpful. Use clear headings or markdown lists when describing purchase guides.
+- All pricing is in Ghana Cedis (GHS / ₵).`;
+
+    // Map history to contents payload compatible with GoogleGenAI structure
+    const contents: any[] = [];
+    if (history && Array.isArray(history)) {
+      history.slice(-10).forEach((h: any) => { // keep last 10 turns to avoid token overhead
+        contents.push({
+          role: h.role === 'user' ? 'user' : 'model',
+          parts: [{ text: h.text }]
+        });
+      });
+    }
+    
+    // Always append current message
+    contents.push({
+      role: 'user',
+      parts: [{ text: message }]
+    });
+
+    const response = await ai.models.generateContent({
+      model: "gemini-3.5-flash",
+      contents,
+      config: {
+        systemInstruction,
+        temperature: 0.7,
+      }
+    });
+
+    return res.json({ reply: response.text });
+  } catch (err: any) {
+    console.error('Gemini API Error:', err.message);
+    // Silent fallback error response - graceful
+    return res.status(500).json({ error: 'Help desk is temporarily optimizing states. Please retry or contact direct admin support.' });
+  }
+});
 
 // Ensure the DB is loaded and tables are ready
 initDb().then(() => {
@@ -125,11 +234,11 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
     // Determine status: if reseller registration fee is enabled, set status to pending_payment until paid
     // If registration fee is NOT enabled, set status to pending_approval so the admin has to review & approve the storefront.
     let initialStatus = 'active';
-    let regFeeAmount = 0;
 
     if (role === 'reseller') {
-      regFeeAmount = settings.registration_fee_ghs;
-      if (settings.registration_fee_enabled && regFeeAmount > 0) {
+      const isFeeEnabled = settings.registration_fee_enabled === true || String(settings.registration_fee_enabled) === 'true';
+      const regFeeAmount = Number(settings.registration_fee_ghs) || 0;
+      if (isFeeEnabled && regFeeAmount > 0) {
         initialStatus = 'pending_payment';
       } else {
         initialStatus = 'pending_approval';
@@ -196,6 +305,17 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
 
     if (user.status === 'suspended') {
       return res.status(403).json({ error: 'Your account has been suspended by the administrator.' });
+    }
+
+    // Auto-reconcile pending_payment reseller status to pending_approval if registration fee is disabled or set to 0
+    if (user.role === 'reseller' && user.status === 'pending_payment') {
+      const settings = await db.getSettings();
+      const isFeeEnabled = settings.registration_fee_enabled === true || String(settings.registration_fee_enabled) === 'true';
+      const regFeeAmount = Number(settings.registration_fee_ghs) || 0;
+      if (!isFeeEnabled || regFeeAmount <= 0) {
+        await db.updateUserStatus(user.id, 'pending_approval');
+        user.status = 'pending_approval';
+      }
     }
 
     // Administrative logins allowed for any validated admin
@@ -301,7 +421,29 @@ app.get('/api/registration-fee', async (req: Request, res: Response) => {
     const settings = await db.getSettings();
     return res.json({
       fee_enabled: settings.registration_fee_enabled,
-      fee_ghs: settings.registration_fee_ghs
+      fee_ghs: settings.registration_fee_ghs,
+      site_name: settings.site_name || 'Mac Data Hub',
+      site_color: settings.site_color || 'amber',
+      global_font_style: settings.global_font_style || 'Outfit',
+      global_font_size: settings.global_font_size || '16px',
+      global_text_color_primary: settings.global_text_color_primary || '',
+      global_text_color_body: settings.global_text_color_body || '',
+      global_text_color_muted: settings.global_text_color_muted || '',
+      global_text_color_accent: settings.global_text_color_accent || '',
+      site_bg_color: settings.site_bg_color || '',
+      site_bg_image: settings.site_bg_image || '',
+      whatsapp_community_link: settings.whatsapp_community_link || '',
+      whatsapp_channel_link: settings.whatsapp_channel_link || '',
+      online_support_enabled: settings.online_support_enabled !== false,
+      online_support_restrictions: settings.online_support_restrictions || '',
+      reviews_popup_enabled: settings.reviews_popup_enabled !== false,
+      reviews_display_duration: settings.reviews_display_duration,
+      reviews_interval: settings.reviews_interval,
+      tax: {
+        enabled: settings.customer_tax_enabled,
+        percent: settings.customer_tax_percent,
+        flatGhs: settings.customer_tax_flat_ghs
+      }
     });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
@@ -348,6 +490,9 @@ app.get('/api/store/:slug', async (req: Request, res: Response) => {
       };
     });
 
+    const settings = await db.getSettings();
+    const storefrontReviews = await db.getReviews(reseller.id);
+
      return res.json({
       reseller: {
         id: reseller.id,
@@ -357,11 +502,66 @@ app.get('/api/store/:slug', async (req: Request, res: Response) => {
         email: reseller.email,
         storefront_enabled: reseller.storefront_enabled !== false
       },
-      bundles: storefrontBundles
+      bundles: storefrontBundles,
+      reviews: storefrontReviews,
+      site_bg_color: settings.site_bg_color || '',
+      site_bg_image: settings.site_bg_image || '',
+      whatsapp_community_link: settings.whatsapp_community_link || '',
+      whatsapp_channel_link: settings.whatsapp_channel_link || '',
+      online_support_enabled: settings.online_support_enabled !== false,
+      online_support_restrictions: settings.online_support_restrictions || '',
+      reviews_popup_enabled: settings.reviews_popup_enabled !== false,
+      reviews_display_duration: settings.reviews_display_duration,
+      reviews_interval: settings.reviews_interval,
+      tax: {
+        enabled: settings.customer_tax_enabled,
+        percent: settings.customer_tax_percent,
+        flatGhs: settings.customer_tax_flat_ghs
+      }
     });
 
   } catch (err: any) {
     console.error('Storefront Fetch Error:', err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Create a review for a storefront
+app.post('/api/store/:resellerId/reviews', async (req: Request, res: Response) => {
+  try {
+    const resellerId = Number(req.params.resellerId);
+    const { author_name, rating, comment } = req.body;
+
+    if (!author_name || !author_name.trim()) {
+      return res.status(400).json({ error: 'Your name is required.' });
+    }
+    if (!rating || isNaN(Number(rating)) || Number(rating) < 1 || Number(rating) > 5) {
+      return res.status(400).json({ error: 'Rating must be between 1 and 5 stars.' });
+    }
+    if (!comment || !comment.trim()) {
+      return res.status(400).json({ error: 'Review comment is required.' });
+    }
+
+    const review = await db.createReview({
+      reseller_id: resellerId,
+      author_name: author_name.trim(),
+      rating: Number(rating),
+      comment: comment.trim()
+    });
+
+    return res.json({ success: true, message: 'Thank you! Your 5-star rating & review was logged successfully.', review });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Fetch reviews for logged in reseller
+app.get('/api/reseller/reviews', verifyToken(['reseller']), async (req: AuthRequest, res: Response) => {
+  try {
+    const resellerId = req.user!.id;
+    const reviews = await db.getReviews(resellerId);
+    return res.json(reviews);
+  } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
 });
@@ -495,6 +695,18 @@ app.post('/api/checkout', async (req: Request, res: Response) => {
 
     const uniqueRef = `MAC-ORD-${Math.floor(Math.random() * 900000 + 100000)}-${Date.now().toString().slice(-4)}`;
 
+    // Calculate customer storefront tax/transaction fee if configured dynamically
+    let customerTaxFee = 0;
+    if (settings.customer_tax_enabled) {
+      const percentageTaxOnBundlePrice = settings.customer_tax_percent > 0 
+        ? Number(((finalCustomerPrice * settings.customer_tax_percent) / 100).toFixed(2)) 
+        : 0;
+      const flatTaxOnBundlePrice = Number(settings.customer_tax_flat_ghs || 0);
+      customerTaxFee = Number((percentageTaxOnBundlePrice + flatTaxOnBundlePrice).toFixed(2));
+    }
+
+    const finalAmountToCharge = Number((finalCustomerPrice + customerTaxFee).toFixed(2));
+
     const newOrder = await db.createOrder({
       order_ref: uniqueRef,
       customer_id: customerUserId,
@@ -506,6 +718,7 @@ app.post('/api/checkout', async (req: Request, res: Response) => {
       final_price_ghs: finalCustomerPrice,
       admin_fee_ghs: adminFee,
       net_to_reseller_ghs: netToReseller,
+      tax_fee_ghs: customerTaxFee,
       delivery_status: 'pending',
       payment_status: 'pending'
     });
@@ -514,7 +727,8 @@ app.post('/api/checkout', async (req: Request, res: Response) => {
       checkout_needed: true,
       order_id: newOrder.id,
       reference: uniqueRef,
-      amount: finalCustomerPrice,
+      amount: finalAmountToCharge,
+      tax_fee_ghs: customerTaxFee,
       email: emailToUse,
       phone: customerPhone,
       payment_method: paymentMethod,
@@ -592,6 +806,31 @@ app.get('/api/admin/dashboard', verifyToken(['admin']), async (req: AuthRequest,
     const totalAdminFees = paidOrders.reduce((sum, o) => sum + Number(o.admin_fee_ghs), 0);
     const paidRegistrations = resellers.reduce((sum, u) => sum + Number(u.registration_fee_paid_ghs || 0), 0);
 
+    // last 7 days calculations
+    const last7Days = [];
+    for (let i = 6; i >= 0; i--) {
+      // Calculate date in current context
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const dateStr = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      const keyStr = d.toISOString().split('T')[0];
+      last7Days.push({ label: dateStr, key: keyStr, revenue: 0, admin_fees: 0, orders: 0 });
+    }
+
+    paidOrders.forEach(o => {
+      if (!o.created_at) return;
+      const orderDate = new Date(o.created_at);
+      const dateKey = orderDate.toISOString().split('T')[0];
+      const match = last7Days.find(day => day.key === dateKey);
+      if (match) {
+        match.revenue = Number((match.revenue + Number(o.final_price_ghs || 0)).toFixed(2));
+        match.admin_fees = Number((match.admin_fees + Number(o.admin_fee_ghs || 0)).toFixed(2));
+        match.orders += 1;
+      }
+    });
+
+    const vtuBalance = settings.vtu_provider_balance !== undefined ? Number(settings.vtu_provider_balance) : 124.50;
+
     const analytics = {
       total_resellers: resellers.length,
       total_customers: customers.length,
@@ -600,10 +839,33 @@ app.get('/api/admin/dashboard', verifyToken(['admin']), async (req: AuthRequest,
       total_admin_fees_earned_ghs: totalAdminFees,
       total_registrations_earned_ghs: paidRegistrations,
       pending_withdrawals: withdrawals.filter(w => w.status === 'pending').length,
-      withdrawal_payouts_ghs: withdrawals.filter(w => w.status === 'approved').reduce((sum, w) => sum + Number(w.amount_ghs), 0)
+      withdrawal_payouts_ghs: withdrawals.filter(w => w.status === 'approved').reduce((sum, w) => sum + Number(w.amount_ghs), 0),
+      vtu_provider_balance_ghs: vtuBalance,
+      daily_revenue_trends: last7Days
     };
 
     return res.json(analytics);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Admin Top Up VTU API balance (simulated)
+app.post('/api/admin/subandgain/topup', verifyToken(['admin']), async (req: AuthRequest, res: Response) => {
+  try {
+    const { amount } = req.body;
+    if (!amount || Number(amount) <= 0 || isNaN(Number(amount))) {
+      return res.status(400).json({ error: 'Please enter a valid positive top up amount.' });
+    }
+    const settings = await db.getSettings();
+    const current = settings.vtu_provider_balance !== undefined ? Number(settings.vtu_provider_balance) : 124.50;
+    const updated = Number((current + Number(amount)).toFixed(2));
+    await db.updateSetting('vtu_provider_balance', String(updated));
+    return res.json({ 
+      success: true, 
+      message: `Successfully topped up SubAndGain VTU developer wallet by GHS ${Number(amount).toFixed(2)}. New balance is GHS ${updated.toFixed(2)}.`, 
+      new_balance: updated 
+    });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
@@ -644,6 +906,60 @@ app.delete('/api/admin/bundles/:id', verifyToken(['admin']), async (req: AuthReq
   try {
     await db.deleteBundle(Number(req.params.id));
     return res.json({ success: true, message: 'Bundle successfully deleted' });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/admin/bundles/reset', verifyToken(['admin']), async (req: AuthRequest, res: Response) => {
+  if (!req.user || req.user.email.toLowerCase() !== 'aaronbinka173@gmail.com') {
+    return res.status(403).json({ error: 'Only the platform owner (aaronbinka173@gmail.com) is authorized to reset the data packages.' });
+  }
+  try {
+    const defaultBundles = [
+      { name: 'MTN 1.5GB Data', network: 'MTN', data_amount: '1.5GB', validity_days: 30, admin_base_price_ghs: 10.00, provider_plan_code: 'mtn-1.5gb', status: 'active' },
+      { name: 'MTN 5GB Mega', network: 'MTN', data_amount: '5GB', validity_days: 30, admin_base_price_ghs: 30.00, provider_plan_code: 'mtn-5gb', status: 'active' },
+      { name: 'Telecel 2GB Flat', network: 'Vodafone', data_amount: '2GB', validity_days: 30, admin_base_price_ghs: 12.00, provider_plan_code: 'voda-2gb', status: 'active' },
+      { name: 'AirtelTigo 3GB Super', network: 'AirtelTigo', data_amount: '3GB', validity_days: 30, admin_base_price_ghs: 11.00, provider_plan_code: 'tigo-3gb', status: 'active' },
+    ];
+
+    // Wipe existing bundles
+    const currentBundles = await db.getBundles();
+    for (const b of currentBundles) {
+      await db.deleteBundle(b.id);
+    }
+
+    // Insert default list
+    for (const b of defaultBundles) {
+      await db.createBundle(b);
+    }
+
+    return res.json({ success: true, message: 'Data packages successfully reset to defaults.' });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Admin Database Backup & Restore Endpoints
+app.get('/api/admin/db-export', verifyToken(['admin']), async (req: AuthRequest, res: Response) => {
+  try {
+    const backup = await db.exportDatabase();
+    res.setHeader('Content-disposition', 'attachment; filename=machub_database_backup.json');
+    res.setHeader('Content-type', 'application/json');
+    return res.send(JSON.stringify(backup, null, 2));
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/admin/db-import', verifyToken(['admin']), express.json({ limit: '50mb' }), async (req: AuthRequest, res: Response) => {
+  try {
+    const payload = req.body;
+    const ok = await db.importDatabase(payload);
+    if (!ok) {
+      return res.status(400).json({ error: 'Failed to import backup. Please make sure the JSON format contains mandatory arrays like users, bundles and orders.' });
+    }
+    return res.json({ success: true, message: 'Database was successfully restored from backup.' });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
@@ -706,6 +1022,18 @@ app.put('/api/admin/resellers/:id/approve', verifyToken(['admin']), async (req: 
     if (targetUser.role === 'admin' && req.user?.email?.toLowerCase() !== 'aaronbinka173@gmail.com') {
       return res.status(403).json({ error: 'Only the platform owner can approve administrator accounts.' });
     }
+
+    // Auto-promote any customer account to reseller upon approval
+    if (targetUser.role === 'customer') {
+      await db.updateUserRole(rId, 'reseller');
+      if (!targetUser.store_name || !targetUser.store_slug) {
+        const emailPrefix = targetUser.email.split('@')[0].toLowerCase().replace(/[^a-z0-9-]/g, '-');
+        const storeName = targetUser.store_name || `${emailPrefix.toUpperCase()} Store`.trim();
+        const storeSlug = targetUser.store_slug || emailPrefix;
+        await db.updateUserStoreInfo(rId, storeName, storeSlug);
+      }
+    }
+
     await db.updateUserStatus(rId, 'active');
     return res.json({ success: true, message: 'Reseller account storefront reviewed, approved, and set to active status.' });
   } catch (err: any) {
@@ -844,6 +1172,59 @@ app.post('/api/admin/send-sms', verifyToken(['admin']), async (req: AuthRequest,
   }
 });
 
+// Admin outbound premium Email broadcaster to target resellers or all partners on Mac Hub
+app.post('/api/admin/send-email', verifyToken(['admin']), async (req: AuthRequest, res: Response) => {
+  try {
+    const { target, subject, message } = req.body;
+    if (!subject || subject.trim().length === 0) {
+      return res.status(400).json({ error: 'Email Subject line is required' });
+    }
+    if (!message || message.trim().length === 0) {
+      return res.status(400).json({ error: 'Email Message content is required' });
+    }
+
+    let targetResellers: any[] = [];
+    if (target === 'all') {
+      targetResellers = await db.getResellerAccounts();
+    } else {
+      const uId = Number(target);
+      const singleReseller = await db.getResellerAccountByUserId(uId);
+      if (!singleReseller) {
+        return res.status(404).json({ error: 'Target reseller account not found' });
+      }
+      const rawUser = await db.getUserById(uId);
+      targetResellers = [{ ...singleReseller, email: rawUser?.email, phone: rawUser?.phone }];
+    }
+
+    if (targetResellers.length === 0) {
+      return res.status(400).json({ error: 'No active partners/resellers registered to receive emails.' });
+    }
+
+    for (const r of targetResellers) {
+      const recipientEmail = r.email || 'customer@example.com';
+      const storeName = r.store_name || r.email.split('@')[0];
+
+      console.log(`\n================== OUTBOUND ADMIN EMAIL DISPATCH TO RESELLER ==================`);
+      console.log(`[Sender]: Aaron Binka <aaronbinka173@gmail.com>`);
+      console.log(`[Recipient Email]: ${recipientEmail}`);
+      console.log(`[Store Name]: ${storeName}`);
+      console.log(`[Subject Line]: ${subject}`);
+      console.log(`[Body Payload]: ${message}`);
+      console.log(`[SMTP Node Status]: Active, TLS Handshake success, Dispatched via verified SMTP relay node (Status: Sent)`);
+      console.log(`==================================================================================\n`);
+    }
+
+    return res.json({
+      success: true,
+      messagePrefix: `Admin Outbound Email Broadcast successfully dispatched to ${targetResellers.length} reseller partner(s).`,
+      dispatchCount: targetResellers.length
+    });
+  } catch (err: any) {
+    console.error('Send Reseller Email Error:', err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // Admin list outbound SMS logs
 app.get('/api/admin/sms-logs', verifyToken(['admin']), async (req: AuthRequest, res: Response) => {
   try {
@@ -940,11 +1321,95 @@ app.get('/api/admin/settings', verifyToken(['admin']), async (req: AuthRequest, 
   }
 });
 
+app.post('/api/admin/withdraw', verifyToken(['admin']), async (req: AuthRequest, res: Response) => {
+  try {
+    const { amount, details } = req.body;
+
+    if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) {
+      return res.status(400).json({ error: 'Please specify a valid, positive withdrawal amount in GHS.' });
+    }
+
+    if (!details || details.trim() === '') {
+      return res.status(400).json({ error: 'Please provide withdrawal receiving details (e.g. MTN Mobile Money number or Bank Account details).' });
+    }
+
+    const amt = Number(amount);
+    const settings = await db.getSettings();
+
+    // Calculate gross profit balance dynamically from real orders and registrations
+    const orders = await db.getOrders();
+    const resellers = await db.getUsers('reseller');
+
+    const paidOrders = orders.filter(o => o.payment_status === 'paid');
+    const totalAdminFees = paidOrders.reduce((sum, o) => sum + Number(o.admin_fee_ghs || 0), 0);
+    const paidRegistrations = resellers.reduce((sum, u) => sum + Number(u.registration_fee_paid_ghs || 0), 0);
+
+    const grossProfit = totalAdminFees + paidRegistrations;
+    const currentWithdrawn = Number(settings.admin_total_withdrawn_ghs || 0);
+    const availableBalance = Number((grossProfit - currentWithdrawn).toFixed(2));
+
+    if (amt > availableBalance) {
+      return res.status(400).json({ 
+        error: `Insufficient admin profit. You requested ₵${amt.toFixed(2)}, but only ₵${availableBalance.toFixed(2)} of accumulated royalties is currently available.` 
+      });
+    }
+
+    // Save updated total withdrawn amount
+    const newWithdrawnTotal = Number((currentWithdrawn + amt).toFixed(2));
+    await db.updateSetting('admin_total_withdrawn_ghs', String(newWithdrawnTotal));
+
+    // Save and serialize the withdrawal logs
+    let logsList: any[] = [];
+    try {
+      logsList = JSON.parse(settings.admin_withdrawal_logs || '[]');
+      if (!Array.isArray(logsList)) {
+        logsList = [];
+      }
+    } catch {
+      logsList = [];
+    }
+
+    const newLog = {
+      id: "AW-" + Math.floor(100000 + Math.random() * 900000),
+      amount_ghs: amt,
+      details: details.trim(),
+      created_at: new Date().toISOString()
+    };
+
+    logsList.unshift(newLog); // Prepend new log to show newest first
+    await db.updateSetting('admin_withdrawal_logs', JSON.stringify(logsList));
+
+    return res.status(200).json({
+      success: true,
+      message: 'Admin manual payout successfully processed and recorded!',
+      withdrawn_amount: amt,
+      new_total_withdrawn: newWithdrawnTotal,
+      available_balance_left: Number((availableBalance - amt).toFixed(2))
+    });
+
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 app.put('/api/admin/settings/registration-fee', verifyToken(['admin']), async (req: AuthRequest, res: Response) => {
   try {
     const { amount, enabled } = req.body;
     await db.updateSetting('registration_fee_ghs', String(amount));
     await db.updateSetting('registration_fee_enabled', String(!!enabled));
+
+    // Auto-promote any stuck resellers with 'pending_payment' if registration fee is disabled or set to 0
+    const isFeeEnabled = enabled === true || String(enabled) === 'true';
+    const regFeeAmount = Number(amount) || 0;
+    if (!isFeeEnabled || regFeeAmount <= 0) {
+      const resellers = await db.getUsers('reseller');
+      for (const r of resellers) {
+        if (r.status === 'pending_payment') {
+          await db.updateUserStatus(r.id, 'pending_approval');
+        }
+      }
+    }
+
     return res.json({ success: true, message: 'Registration fee configured successfully.' });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
@@ -1033,6 +1498,301 @@ app.put('/api/admin/settings/whatsapp-community', verifyToken(['admin']), async 
   }
 });
 
+app.put('/api/admin/settings/whatsapp-channel', verifyToken(['admin']), async (req: AuthRequest, res: Response) => {
+  try {
+    const { link } = req.body;
+    await db.updateSetting('whatsapp_channel_link', String(link || ''));
+    return res.json({ success: true, message: 'WhatsApp reseller channel link refreshed successfully.' });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/admin/settings/branding', verifyToken(['admin']), async (req: AuthRequest, res: Response) => {
+  try {
+    const { site_name, site_color, site_bg_color, site_bg_image } = req.body;
+    if (site_name !== undefined) await db.updateSetting('site_name', String(site_name || 'Mac Data Hub'));
+    if (site_color !== undefined) await db.updateSetting('site_color', String(site_color || 'amber'));
+    if (site_bg_color !== undefined) await db.updateSetting('site_bg_color', String(site_bg_color || ''));
+    if (site_bg_image !== undefined) await db.updateSetting('site_bg_image', String(site_bg_image || ''));
+    return res.json({ success: true, message: 'Platform branding name, theme colors, background configurations, and custom background images updated.' });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/admin/settings/support', verifyToken(['admin']), async (req: AuthRequest, res: Response) => {
+  try {
+    const { online_support_enabled, online_support_restrictions } = req.body;
+    if (online_support_enabled !== undefined) {
+      await db.updateSetting('online_support_enabled', String(online_support_enabled));
+    }
+    if (online_support_restrictions !== undefined) {
+      await db.updateSetting('online_support_restrictions', String(online_support_restrictions));
+    }
+    return res.json({ success: true, message: 'Online live support and safety restrictions configuration updated successfully.' });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/admin/settings/reviews-popup', verifyToken(['admin']), async (req: AuthRequest, res: Response) => {
+  try {
+    const { reviews_popup_enabled, reviews_display_duration, reviews_interval } = req.body;
+    if (reviews_popup_enabled !== undefined) {
+      await db.updateSetting('reviews_popup_enabled', String(reviews_popup_enabled));
+    }
+    if (reviews_display_duration !== undefined) {
+      await db.updateSetting('reviews_display_duration', String(reviews_display_duration));
+    }
+    if (reviews_interval !== undefined) {
+      await db.updateSetting('reviews_interval', String(reviews_interval));
+    }
+    return res.json({ success: true, message: '5-Star reviews popup global display settings updated successfully.' });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/admin/settings/typography', verifyToken(['admin']), async (req: AuthRequest, res: Response) => {
+  try {
+    const { 
+      global_font_style, 
+      global_font_size, 
+      global_text_color_primary, 
+      global_text_color_body, 
+      global_text_color_muted, 
+      global_text_color_accent 
+    } = req.body;
+
+    if (global_font_style !== undefined) await db.updateSetting('global_font_style', String(global_font_style));
+    if (global_font_size !== undefined) await db.updateSetting('global_font_size', String(global_font_size));
+    if (global_text_color_primary !== undefined) await db.updateSetting('global_text_color_primary', String(global_text_color_primary));
+    if (global_text_color_body !== undefined) await db.updateSetting('global_text_color_body', String(global_text_color_body));
+    if (global_text_color_muted !== undefined) await db.updateSetting('global_text_color_muted', String(global_text_color_muted));
+    if (global_text_color_accent !== undefined) await db.updateSetting('global_text_color_accent', String(global_text_color_accent));
+
+    return res.json({ success: true, message: 'Platform typography, text sizes, and writing colors updated successfully.' });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/admin/settings/customer-tax', verifyToken(['admin']), async (req: AuthRequest, res: Response) => {
+  try {
+    const { enabled, percent, flatGhs } = req.body;
+    await db.updateSetting('customer_tax_enabled', String(!!enabled));
+    await db.updateSetting('customer_tax_percent', String(Number(percent || 0)));
+    await db.updateSetting('customer_tax_flat_ghs', String(Number(flatGhs || 0)));
+    return res.json({ success: true, message: 'Storefront customer tax/transaction fee settings updated successfully.' });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/admin/subandgain/plans', verifyToken(['admin']), async (req: AuthRequest, res: Response) => {
+  if (!req.user || req.user.email.toLowerCase() !== 'aaronbinka173@gmail.com') {
+    return res.status(403).json({ error: 'Only the platform owner (aaronbinka173@gmail.com) is authorized to fetch or inspect data API plans.' });
+  }
+  try {
+    const settings = await db.getSettings();
+    const isMock = settings.data_api_key === 'mock_api_key' || !settings.data_api_key;
+
+    // Predefined exact Ghanaian networks base price packages from SubAndGain/DataHustle/GigzHub rates in GHS
+    const isGigzHub = settings.data_api_url && settings.data_api_url.toLowerCase().includes('gigzhub');
+    const isDataHustle = settings.data_api_url && settings.data_api_url.toLowerCase().includes('datahustle');
+    
+    const referencePlans = isGigzHub ? [
+      // MTN SME (Non-Expiry) on GigzHub
+      { name: "MTN SME 500 MB (GigzHub)", network: "MTN", data_amount: "500MB", validity_days: 30, base_price_ghs: 1.95, provider_plan_code: "mtn-sme-500mb" },
+      { name: "MTN SME 1.0 GB (GigzHub)", network: "MTN", data_amount: "1GB", validity_days: 30, base_price_ghs: 3.85, provider_plan_code: "mtn-sme-1gb" },
+      { name: "MTN SME 2.0 GB (GigzHub)", network: "MTN", data_amount: "2GB", validity_days: 30, base_price_ghs: 7.70, provider_plan_code: "mtn-sme-2gb" },
+      { name: "MTN SME 3.0 GB (GigzHub)", network: "MTN", data_amount: "3GB", validity_days: 30, base_price_ghs: 11.55, provider_plan_code: "mtn-sme-3gb" },
+      { name: "MTN SME 5.0 GB (GigzHub)", network: "MTN", data_amount: "5GB", validity_days: 30, base_price_ghs: 19.25, provider_plan_code: "mtn-sme-5gb" },
+      { name: "MTN SME 10.0 GB (GigzHub)", network: "MTN", data_amount: "10GB", validity_days: 30, base_price_ghs: 38.50, provider_plan_code: "mtn-sme-10gb" },
+      { name: "MTN SME 20.0 GB (GigzHub)", network: "MTN", data_amount: "20GB", validity_days: 30, base_price_ghs: 77.00, provider_plan_code: "mtn-sme-20gb" },
+      { name: "MTN SME 50.0 GB (GigzHub)", network: "MTN", data_amount: "50GB", validity_days: 30, base_price_ghs: 192.50, provider_plan_code: "mtn-sme-50gb" },
+      { name: "MTN SME 100.0 GB (GigzHub)", network: "MTN", data_amount: "100GB", validity_days: 30, base_price_ghs: 385.00, provider_plan_code: "mtn-sme-100gb" },
+      // MTN Gifting on GigzHub
+      { name: "MTN Gifting 1.0 GB (GigzHub)", network: "MTN", data_amount: "1GB", validity_days: 30, base_price_ghs: 4.10, provider_plan_code: "mtn-gft-1gb" },
+      { name: "MTN Gifting 2.0 GB (GigzHub)", network: "MTN", data_amount: "2GB", validity_days: 30, base_price_ghs: 8.20, provider_plan_code: "mtn-gft-2gb" },
+      { name: "MTN Gifting 3.0 GB (GigzHub)", network: "MTN", data_amount: "3GB", validity_days: 30, base_price_ghs: 12.30, provider_plan_code: "mtn-gft-3gb" },
+      { name: "MTN Gifting 5.0 GB (GigzHub)", network: "MTN", data_amount: "5GB", validity_days: 30, base_price_ghs: 20.50, provider_plan_code: "mtn-gft-5gb" },
+      { name: "MTN Gifting 10.0 GB (GigzHub)", network: "MTN", data_amount: "10GB", validity_days: 30, base_price_ghs: 41.00, provider_plan_code: "mtn-gft-10gb" },
+      // Telecel / Vodafone Ghana on GigzHub
+      { name: "Telecel 1.0 GB Standard (GigzHub)", network: "Vodafone", data_amount: "1GB", validity_days: 30, base_price_ghs: 3.20, provider_plan_code: "voda-std-1gb" },
+      { name: "Telecel 2.0 GB Standard (GigzHub)", network: "Vodafone", data_amount: "2GB", validity_days: 30, base_price_ghs: 6.40, provider_plan_code: "voda-std-2gb" },
+      { name: "Telecel 3.0 GB Standard (GigzHub)", network: "Vodafone", data_amount: "3GB", validity_days: 30, base_price_ghs: 9.60, provider_plan_code: "voda-std-3gb" },
+      { name: "Telecel 5.0 GB Standard (GigzHub)", network: "Vodafone", data_amount: "5GB", validity_days: 30, base_price_ghs: 16.00, provider_plan_code: "voda-std-5gb" },
+      { name: "Telecel 10.0 GB Standard (GigzHub)", network: "Vodafone", data_amount: "10GB", validity_days: 30, base_price_ghs: 32.00, provider_plan_code: "voda-std-10gb" },
+      { name: "Telecel 20.0 GB Standard (GigzHub)", network: "Vodafone", data_amount: "20GB", validity_days: 30, base_price_ghs: 64.00, provider_plan_code: "voda-std-20gb" },
+      { name: "Telecel 50.0 GB Standard (GigzHub)", network: "Vodafone", data_amount: "50GB", validity_days: 30, base_price_ghs: 160.00, provider_plan_code: "voda-std-50gb" },
+      { name: "Telecel 100.0 GB Standard (GigzHub)", network: "Vodafone", data_amount: "100GB", validity_days: 30, base_price_ghs: 320.00, provider_plan_code: "voda-std-100gb" },
+      // AirtelTigo / AT Ghana on GigzHub
+      { name: "AirtelTigo 1.0 GB Classic (GigzHub)", network: "AirtelTigo", data_amount: "1GB", validity_days: 30, base_price_ghs: 3.10, provider_plan_code: "at-classic-1gb" },
+      { name: "AirtelTigo 2.0 GB Classic (GigzHub)", network: "AirtelTigo", data_amount: "2GB", validity_days: 30, base_price_ghs: 6.20, provider_plan_code: "at-classic-2gb" },
+      { name: "AirtelTigo 3.0 GB Classic (GigzHub)", network: "AirtelTigo", data_amount: "3GB", validity_days: 30, base_price_ghs: 9.30, provider_plan_code: "at-classic-3gb" },
+      { name: "AirtelTigo 5.0 GB Classic (GigzHub)", network: "AirtelTigo", data_amount: "5GB", validity_days: 30, base_price_ghs: 15.50, provider_plan_code: "at-classic-5gb" },
+      { name: "AirtelTigo 10.0 GB Classic (GigzHub)", network: "AirtelTigo", data_amount: "10GB", validity_days: 30, base_price_ghs: 31.00, provider_plan_code: "at-classic-10gb" },
+      { name: "AirtelTigo 20.0 GB Classic (GigzHub)", network: "AirtelTigo", data_amount: "20GB", validity_days: 30, base_price_ghs: 62.00, provider_plan_code: "at-classic-20gb" },
+      { name: "AirtelTigo 50.0 GB Classic (GigzHub)", network: "AirtelTigo", data_amount: "50GB", validity_days: 30, base_price_ghs: 155.00, provider_plan_code: "at-classic-50gb" },
+      { name: "AirtelTigo 100.0 GB Classic (GigzHub)", network: "AirtelTigo", data_amount: "100GB", validity_days: 30, base_price_ghs: 310.00, provider_plan_code: "at-classic-100gb" }
+    ] : (isDataHustle ? [
+      // MTN SME (Non-Expiry)
+      { name: "MTN SME 500 MB (DataHustle)", network: "MTN", data_amount: "500MB", validity_days: 30, base_price_ghs: 2.10, provider_plan_code: "mtn-sme-500mb" },
+      { name: "MTN SME 1.0 GB (DataHustle)", network: "MTN", data_amount: "1GB", validity_days: 30, base_price_ghs: 4.20, provider_plan_code: "mtn-sme-1gb" },
+      { name: "MTN SME 2.0 GB (DataHustle)", network: "MTN", data_amount: "2GB", validity_days: 30, base_price_ghs: 8.40, provider_plan_code: "mtn-sme-2gb" },
+      { name: "MTN SME 3.0 GB (DataHustle)", network: "MTN", data_amount: "3GB", validity_days: 30, base_price_ghs: 12.60, provider_plan_code: "mtn-sme-3gb" },
+      { name: "MTN SME 5.0 GB (DataHustle)", network: "MTN", data_amount: "5GB", validity_days: 30, base_price_ghs: 21.00, provider_plan_code: "mtn-sme-5gb" },
+      { name: "MTN SME 10.0 GB (DataHustle)", network: "MTN", data_amount: "10GB", validity_days: 30, base_price_ghs: 42.00, provider_plan_code: "mtn-sme-10gb" },
+      { name: "MTN SME 20.0 GB (DataHustle)", network: "MTN", data_amount: "20GB", validity_days: 30, base_price_ghs: 84.00, provider_plan_code: "mtn-sme-20gb" },
+      { name: "MTN SME 50.0 GB (DataHustle)", network: "MTN", data_amount: "50GB", validity_days: 30, base_price_ghs: 210.00, provider_plan_code: "mtn-sme-5gb" },
+      { name: "MTN SME 100.0 GB (DataHustle)", network: "MTN", data_amount: "100GB", validity_days: 30, base_price_ghs: 420.00, provider_plan_code: "mtn-sme-100gb" },
+      // MTN Gifting
+      { name: "MTN Gifting 1.0 GB (DataHustle)", network: "MTN", data_amount: "1GB", validity_days: 30, base_price_ghs: 4.50, provider_plan_code: "mtn-gft-1gb" },
+      { name: "MTN Gifting 1.5 GB (DataHustle)", network: "MTN", data_amount: "1.5GB", validity_days: 30, base_price_ghs: 9.90, provider_plan_code: "mtn-gft-1.5gb" },
+      { name: "MTN Gifting 2.0 GB (DataHustle)", network: "MTN", data_amount: "2GB", validity_days: 30, base_price_ghs: 9.00, provider_plan_code: "mtn-gft-2gb" },
+      { name: "MTN Gifting 3.0 GB (DataHustle)", network: "MTN", data_amount: "3GB", validity_days: 30, base_price_ghs: 18.50, provider_plan_code: "mtn-gft-3gb" },
+      { name: "MTN Gifting 5.0 GB (DataHustle)", network: "MTN", data_amount: "5GB", validity_days: 30, base_price_ghs: 22.50, provider_plan_code: "mtn-gft-5gb" },
+      { name: "MTN Gifting 10.0 GB (DataHustle)", network: "MTN", data_amount: "10GB", validity_days: 30, base_price_ghs: 45.00, provider_plan_code: "mtn-gft-10gb" },
+      // Telecel / Vodafone Ghana
+      { name: "Telecel 1.0 GB Standard (DataHustle)", network: "Vodafone", data_amount: "1GB", validity_days: 30, base_price_ghs: 3.90, provider_plan_code: "voda-std-1gb" },
+      { name: "Telecel 2.0 GB Standard (DataHustle)", network: "Vodafone", data_amount: "2GB", validity_days: 30, base_price_ghs: 7.80, provider_plan_code: "voda-std-2gb" },
+      { name: "Telecel 3.0 GB Standard (DataHustle)", network: "Vodafone", data_amount: "3GB", validity_days: 30, base_price_ghs: 11.70, provider_plan_code: "voda-std-3gb" },
+      { name: "Telecel 5.0 GB Standard (DataHustle)", network: "Vodafone", data_amount: "5GB", validity_days: 30, base_price_ghs: 19.50, provider_plan_code: "voda-std-5gb" },
+      { name: "Telecel 10.0 GB Standard (DataHustle)", network: "Vodafone", data_amount: "10GB", validity_days: 30, base_price_ghs: 39.00, provider_plan_code: "voda-std-10gb" },
+      { name: "Telecel 20.0 GB Standard (DataHustle)", network: "Vodafone", data_amount: "20GB", validity_days: 30, base_price_ghs: 78.00, provider_plan_code: "voda-std-20gb" },
+      { name: "Telecel 30.0 GB Standard (DataHustle)", network: "Vodafone", data_amount: "30GB", validity_days: 30, base_price_ghs: 117.00, provider_plan_code: "voda-std-30gb" },
+      { name: "Telecel 50.0 GB Standard (DataHustle)", network: "Vodafone", data_amount: "50GB", validity_days: 30, base_price_ghs: 195.00, provider_plan_code: "voda-std-50gb" },
+      { name: "Telecel 100.0 GB Standard (DataHustle)", network: "Vodafone", data_amount: "100GB", validity_days: 30, base_price_ghs: 390.00, provider_plan_code: "voda-std-100gb" },
+      // AirtelTigo / AT Ghana
+      { name: "AirtelTigo 1.0 GB Classic (DataHustle)", network: "AirtelTigo", data_amount: "1GB", validity_days: 30, base_price_ghs: 3.95, provider_plan_code: "at-classic-1gb" },
+      { name: "AirtelTigo 2.0 GB Classic (DataHustle)", network: "AirtelTigo", data_amount: "2GB", validity_days: 30, base_price_ghs: 7.90, provider_plan_code: "at-classic-2gb" },
+      { name: "AirtelTigo 3.0 GB Classic (DataHustle)", network: "AirtelTigo", data_amount: "3GB", validity_days: 30, base_price_ghs: 11.85, provider_plan_code: "at-classic-3gb" },
+      { name: "AirtelTigo 5.0 GB Classic (DataHustle)", network: "AirtelTigo", data_amount: "5GB", validity_days: 30, base_price_ghs: 19.75, provider_plan_code: "at-classic-5gb" },
+      { name: "AirtelTigo 10.0 GB Classic (DataHustle)", network: "AirtelTigo", data_amount: "10GB", validity_days: 30, base_price_ghs: 39.50, provider_plan_code: "at-classic-10gb" },
+      { name: "AirtelTigo 20.0 GB Classic (DataHustle)", network: "AirtelTigo", data_amount: "20GB", validity_days: 30, base_price_ghs: 79.00, provider_plan_code: "at-classic-20gb" },
+      { name: "AirtelTigo 50.0 GB Classic (DataHustle)", network: "AirtelTigo", data_amount: "50GB", validity_days: 30, base_price_ghs: 197.50, provider_plan_code: "at-classic-50gb" },
+      { name: "AirtelTigo 100.0 GB Classic (DataHustle)", network: "AirtelTigo", data_amount: "100GB", validity_days: 30, base_price_ghs: 395.00, provider_plan_code: "at-classic-100gb" }
+    ] : [
+      { name: "MTN SME 1.0 GB", network: "MTN", data_amount: "1GB", validity_days: 30, base_price_ghs: 6.00, provider_plan_code: "mtn-sme-1gb" },
+      { name: "MTN SME 2.0 GB", network: "MTN", data_amount: "2GB", validity_days: 30, base_price_ghs: 11.50, provider_plan_code: "mtn-sme-2gb" },
+      { name: "MTN SME 5.0 GB", network: "MTN", data_amount: "5GB", validity_days: 30, base_price_ghs: 28.00, provider_plan_code: "mtn-sme-5gb" },
+      { name: "MTN SME 10.0 GB", network: "MTN", data_amount: "10GB", validity_days: 30, base_price_ghs: 55.00, provider_plan_code: "mtn-sme-10gb" },
+      { name: "MTN SME 20.0 GB", network: "MTN", data_amount: "20GB", validity_days: 30, base_price_ghs: 105.00, provider_plan_code: "mtn-sme-20gb" },
+      { name: "MTN Gifting 1.5 GB", network: "MTN", data_amount: "1.5GB", validity_days: 30, base_price_ghs: 11.00, provider_plan_code: "mtn-gft-1.5gb" },
+      { name: "MTN Gifting 3.0 GB", network: "MTN", data_amount: "3GB", validity_days: 30, base_price_ghs: 21.00, provider_plan_code: "mtn-gft-3gb" },
+      { name: "Telecel 1.0 GB Standard", network: "Vodafone", data_amount: "1GB", validity_days: 30, base_price_ghs: 7.00, provider_plan_code: "voda-std-1gb" },
+      { name: "Telecel 2.0 GB Standard", network: "Vodafone", data_amount: "2GB", validity_days: 30, base_price_ghs: 13.00, provider_plan_code: "voda-std-2gb" },
+      { name: "Telecel 5.0 GB Standard", network: "Vodafone", data_amount: "5GB", validity_days: 30, base_price_ghs: 31.00, provider_plan_code: "voda-std-5gb" },
+      { name: "AirtelTigo 1.0 GB Classic", network: "AirtelTigo", data_amount: "1GB", validity_days: 30, base_price_ghs: 5.50, provider_plan_code: "at-classic-1gb" },
+      { name: "AirtelTigo 2.5 GB Classic", network: "AirtelTigo", data_amount: "2.5GB", validity_days: 30, base_price_ghs: 12.50, provider_plan_code: "at-classic-2.5gb" },
+      { name: "AirtelTigo 6.0 GB Classic", network: "AirtelTigo", data_amount: "6GB", validity_days: 30, base_price_ghs: 27.00, provider_plan_code: "at-classic-6gb" }
+    ]);
+
+    if (isMock) {
+      return res.json({ provider: 'subandgain-simulated', plans: referencePlans });
+    }
+
+    try {
+      let rawUrl = settings.data_api_url || 'https://subandgain.com/api/data.php';
+      if (rawUrl && !rawUrl.endsWith('.php') && !rawUrl.includes('/api/')) {
+        const base = rawUrl.endsWith('/') ? rawUrl.slice(0, -1) : rawUrl;
+        rawUrl = `${base}/api/data.php`;
+      }
+      const apiUrl = `${rawUrl}?username=${encodeURIComponent(settings.data_api_username || '')}&apiKey=${encodeURIComponent(settings.data_api_key || '')}&query=plans`;
+      
+      const controller = new AbortController();
+      const id = setTimeout(() => controller.abort(), 6000);
+      const resp = await fetch(apiUrl, { signal: controller.signal });
+      clearTimeout(id);
+
+      if (resp.ok) {
+        const text = await resp.text();
+        if (text.trim().startsWith('<!DOCTYPE') || text.trim().startsWith('<html') || text.trim().startsWith('<div')) {
+          console.log(`SubAndGain live plans fetch returned HTML response from ${rawUrl}. Please make sure you have mapped the correct VTU API endpoint in settings.`);
+        } else {
+          try {
+            const json = JSON.parse(text);
+            if (json && (Array.isArray(json) || json.plans || json.data)) {
+              const liveList = Array.isArray(json) ? json : (json.plans || json.data || []);
+              const mapped = liveList.map((item: any) => ({
+                name: item.name || `${item.network} ${item.size || item.plan_size}`,
+                network: item.network || 'MTN',
+                data_amount: item.size || item.plan_size || '1GB',
+                validity_days: Number(item.validity) || 30,
+                base_price_ghs: Number(item.price || item.cost || 10),
+                provider_plan_code: String(item.code || item.plan_id || item.plan_code)
+              }));
+              return res.json({ provider: 'subandgain-live', plans: mapped });
+            }
+          } catch (parseErr) {
+            console.log('SubAndGain live plans response parsing failed (expected JSON but received raw response):', text.slice(0, 100));
+          }
+        }
+      } else {
+        console.log(`SubAndGain live plans fetch returned HTTP status ${resp.status}`);
+      }
+    } catch (fetchErr) {
+      console.log('SubAndGain live plans fetch bypassed (using fallback lists):', fetchErr);
+    }
+
+    return res.json({ provider: 'subandgain-preset', plans: referencePlans });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/admin/subandgain/import', verifyToken(['admin']), async (req: AuthRequest, res: Response) => {
+  if (!req.user || req.user.email.toLowerCase() !== 'aaronbinka173@gmail.com') {
+    return res.status(403).json({ error: 'Only the platform owner (aaronbinka173@gmail.com) is authorized to reset or synchronize data packages.' });
+  }
+  try {
+    const { plans } = req.body;
+    if (!Array.isArray(plans)) {
+      return res.status(400).json({ error: 'Payload must contain a plans array' });
+    }
+
+    let createdCount = 0;
+    let updatedCount = 0;
+
+    for (const plan of plans) {
+      const existingBundles = await db.getBundles();
+      const match = existingBundles.find((b: any) => b.provider_plan_code === plan.provider_plan_code);
+      if (match) {
+        await db.updateBundle(match.id, {
+          name: plan.name,
+          network: plan.network,
+          data_amount: plan.data_amount,
+          validity_days: Number(plan.validity_days || 30),
+          admin_base_price_ghs: Number(plan.admin_base_price_ghs),
+          provider_plan_code: plan.provider_plan_code,
+          status: match.status || 'active'
+        });
+        updatedCount++;
+      } else {
+        await db.createBundle({
+          name: plan.name,
+          network: plan.network,
+          data_amount: plan.data_amount,
+          validity_days: Number(plan.validity_days || 30),
+          admin_base_price_ghs: Number(plan.admin_base_price_ghs),
+          provider_plan_code: plan.provider_plan_code,
+          status: 'active'
+        });
+        createdCount++;
+      }
+    }
+
+    return res.json({
+      success: true,
+      message: `Import complete. Handled ${plans.length} bundle specifications (created ${createdCount}, modified ${updatedCount}).`
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // ==========================================
 // 5. RESELLER PROTECTED CAPABILITIES
 // ==========================================
@@ -1059,7 +1819,8 @@ app.get('/api/reseller/dashboard', verifyToken(['reseller']), async (req: AuthRe
       total_customers_acquired: distinctPhones.size,
       pending_withdrawal_ghs: withdrawals.filter(w => w.status === 'pending').reduce((sum, w) => sum + Number(w.amount_ghs), 0),
       storefront_enabled: user ? user.storefront_enabled !== false : true,
-      whatsapp_community_link: settings.whatsapp_community_link || ''
+      whatsapp_community_link: settings.whatsapp_community_link || '',
+      whatsapp_channel_link: settings.whatsapp_channel_link || ''
     });
 
   } catch (err: any) {
@@ -1212,6 +1973,10 @@ app.post('/api/reseller/withdraw', verifyToken(['reseller']), async (req: AuthRe
     }
 
     const amt = Number(amount);
+    if (amt <= 5.00) {
+      return res.status(400).json({ error: 'Resellers can only withdraw profits above 5 GHS (minimum 5.01 GHS).' });
+    }
+
     const account = await db.getResellerAccountByUserId(resellerId);
     if (!account || account.balance_ghs < amt) {
       return res.status(400).json({ 

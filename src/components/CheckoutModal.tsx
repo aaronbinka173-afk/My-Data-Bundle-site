@@ -6,11 +6,12 @@ import {
 interface CheckoutModalProps {
   bundle: any;
   reseller: any | null; // null if purchased from main catalog
+  globalTax?: any | null; // Optional tax settings from root home
   onClose: () => void;
   onSuccess: () => void;
 }
 
-export default function CheckoutModal({ bundle, reseller, onClose, onSuccess }: CheckoutModalProps) {
+export default function CheckoutModal({ bundle, reseller, globalTax, onClose, onSuccess }: CheckoutModalProps) {
   const [step, setStep] = useState<'details' | 'processing' | 'success' | 'failed'>('details');
   const [buyerEmail, setBuyerEmail] = useState<string>('');
   const [buyerPhone, setBuyerPhone] = useState<string>('');
@@ -184,6 +185,19 @@ export default function CheckoutModal({ bundle, reseller, onClose, onSuccess }: 
   };
 
   const finalPriceGhs = reseller ? bundle.final_price_ghs : bundle.admin_base_price_ghs;
+  const hasTax = reseller 
+    ? (reseller.tax && reseller.tax.enabled)
+    : (globalTax && globalTax.enabled);
+  const taxPercent = hasTax 
+    ? (reseller ? Number(reseller.tax.percent || 0) : Number(globalTax.percent || 0)) 
+    : 0;
+  const taxFlat = hasTax 
+    ? (reseller ? Number(reseller.tax.flatGhs || 0) : Number(globalTax.flatGhs || 0)) 
+    : 0;
+  const calculatedTax = hasTax 
+    ? Number((((finalPriceGhs * taxPercent) / 100) + taxFlat).toFixed(2)) 
+    : 0;
+  const overallPriceGhs = Number((finalPriceGhs + calculatedTax).toFixed(2));
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-sm p-4">
@@ -309,11 +323,44 @@ export default function CheckoutModal({ bundle, reseller, onClose, onSuccess }: 
                 </div>
               )}
 
+              {/* Dynamic Customer Tax Surcharge Breakout */}
+              {hasTax && calculatedTax > 0 && (
+                <div className="bg-slate-950/45 p-3 rounded-lg border border-slate-800 space-y-1 text-xxs font-sans mt-2">
+                  <div className="flex justify-between border-b border-slate-800 pb-1 font-bold text-slate-400">
+                    <span>Pricing Breakdown</span>
+                    <span>Amount</span>
+                  </div>
+                  <div className="flex justify-between text-slate-400">
+                    <span>Data package price:</span>
+                    <span>₵{Number(finalPriceGhs).toFixed(2)} GHS</span>
+                  </div>
+                  <div className="flex justify-between text-slate-400">
+                    <span>Storefront tax fee:</span>
+                    <span className="text-amber-400 font-semibold">₵{Number(calculatedTax).toFixed(2)} GHS</span>
+                  </div>
+                  {taxPercent > 0 && taxFlat > 0 && (
+                    <span className="text-[9px] text-slate-500 block leading-tight">
+                      *Includes {taxPercent}% processing tax rate + GHS {taxFlat.toFixed(2)} flat fee.
+                    </span>
+                  )}
+                  {taxPercent > 0 && taxFlat === 0 && (
+                    <span className="text-[9px] text-slate-500 block leading-tight">
+                      *Calculated based on {taxPercent}% web service processing surcharge.
+                    </span>
+                  )}
+                  {taxPercent === 0 && taxFlat > 0 && (
+                    <span className="text-[9px] text-slate-500 block leading-tight">
+                      *Includes a GHS {taxFlat.toFixed(2)} storefront flat convenience tax.
+                    </span>
+                  )}
+                </div>
+              )}
+
               {/* Final price section */}
               <div className="border-t border-slate-800 pt-4 flex justify-between items-center">
                 <div>
                   <span className="text-xxs text-slate-500 block uppercase font-mono">Total customer fee</span>
-                  <span className="font-extrabold text-slate-200 text-xl font-sans">₵{Number(finalPriceGhs).toFixed(2)} GHS</span>
+                  <span className="font-extrabold text-slate-200 text-xl font-sans">₵{Number(overallPriceGhs).toFixed(2)} GHS</span>
                 </div>
                 
                 <button

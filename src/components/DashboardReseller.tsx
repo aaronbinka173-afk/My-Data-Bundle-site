@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { 
-  DollarSign, Users, ShoppingCart, Landmark, ArrowUpRight, Copy, Check, Info, Settings2, RefreshCw, AlertCircle
+  DollarSign, Users, ShoppingCart, Landmark, ArrowUpRight, Copy, Check, Info, Settings2, RefreshCw, AlertCircle, Star
 } from 'lucide-react';
 import { Bundle, ResellerAccount, WithdrawalRequest, Order } from '../types';
 import CheckoutModal from './CheckoutModal';
@@ -11,7 +11,7 @@ interface DashboardResellerProps {
 }
 
 export default function DashboardReseller({ token, user }: DashboardResellerProps) {
-  const [activeTab, setActiveTab] = useState<'stats' | 'pricing' | 'customers' | 'orders' | 'withdrawals'>('stats');
+  const [activeTab, setActiveTab] = useState<'stats' | 'pricing' | 'customers' | 'orders' | 'withdrawals' | 'reviews'>('stats');
   
   const [loading, setLoading] = useState<boolean>(true);
   const [purchaseBundle, setPurchaseBundle] = useState<any | null>(null);
@@ -20,6 +20,7 @@ export default function DashboardReseller({ token, user }: DashboardResellerProp
   const [customers, setCustomers] = useState<any[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [withdrawals, setWithdrawals] = useState<WithdrawalRequest[]>([]);
+  const [reviews, setReviews] = useState<any[]>([]);
   const [adminSettings, setAdminSettings] = useState<any>(null);
   const [notification, setNotification] = useState<{ message: string; type: 'success' | 'danger' } | null>(null);
 
@@ -81,6 +82,9 @@ export default function DashboardReseller({ token, user }: DashboardResellerProp
         // Refresh balance
         const syncAn = await fetch('/api/reseller/dashboard', { headers });
         if (syncAn.ok) setAnalytics(await syncAn.json());
+      } else if (activeTab === 'reviews') {
+        const res = await fetch('/api/reseller/reviews', { headers });
+        if (res.ok) setReviews(await res.json());
       }
     } catch (e) {
       console.error(e);
@@ -134,6 +138,11 @@ export default function DashboardReseller({ token, user }: DashboardResellerProp
   const handleWithdrawRequest = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!withdrawAmount || withdrawAmount <= 0) return;
+    
+    if (withdrawAmount <= 5.00) {
+      showNotification('Withdrawals are restricted to amounts strictly above ₵5.00 GHS (minimum ₵5.01).', 'danger');
+      return;
+    }
 
     try {
       const response = await fetch('/api/reseller/withdraw', {
@@ -191,6 +200,15 @@ export default function DashboardReseller({ token, user }: DashboardResellerProp
               {copiedStoreLink ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-slate-400" />}
               {copiedStoreLink ? 'Copied URL!' : 'Copy Shareable Link'}
             </button>
+            <a
+              href={`/store/${user.store_slug}`}
+              target="_blank"
+              rel="noreferrer"
+              className="flex items-center gap-1 px-2.5 py-0.5 bg-amber-500 hover:bg-amber-600 hover:scale-[1.02] text-slate-950 font-extrabold rounded text-xxs transition-all shadow-sm"
+            >
+              <ArrowUpRight className="w-3.5 h-3.5 shrink-0" />
+              View Storefront
+            </a>
           </div>
         </div>
 
@@ -220,6 +238,7 @@ export default function DashboardReseller({ token, user }: DashboardResellerProp
           { id: 'customers', label: 'Distributor Customers', icon: Users },
           { id: 'orders', label: 'Storefront Orders', icon: ShoppingCart },
           { id: 'withdrawals', label: 'Withdrawal Ledger', icon: Landmark },
+          { id: 'reviews', label: 'Reviews & 5-Stars', icon: Star },
         ].map(tab => {
           const Icon = tab.icon;
           const isSelected = activeTab === tab.id;
@@ -359,26 +378,40 @@ export default function DashboardReseller({ token, user }: DashboardResellerProp
                   </div>
                 </div>
 
-                {analytics?.whatsapp_community_link && (
+                {((analytics as any)?.whatsapp_community_link || (analytics as any)?.whatsapp_channel_link) && (
                   <div className="bg-emerald-950/25 p-5 rounded-xl border border-emerald-800/20 flex flex-col justify-between gap-4 text-sm text-slate-200 relative overflow-hidden group">
                     <div className="absolute -right-6 -bottom-6 w-24 h-24 bg-emerald-500/5 rounded-full blur-xl group-hover:bg-emerald-500/10 transition"></div>
                     <div className="flex gap-3">
-                      <span className="text-xl shrink-0">💬</span>
+                      <span className="text-emerald-500 text-xl shrink-0">💬</span>
                       <div className="space-y-1">
-                        <h4 className="font-semibold text-emerald-400 font-sans tracking-tight">Resellers WhatsApp Hub</h4>
+                        <h4 className="font-semibold text-emerald-400 font-sans tracking-tight">Resellers WhatsApp Hubs</h4>
                         <p className="text-slate-400 text-[11px] leading-relaxed">
-                          Join our secure reseller-only WhatsApp group to get instant platform updates, plan status logs, and live network digests.
+                          Join our official WhatsApp group and follow our channels to get instant platform updates, plan status logs, and live digests.
                         </p>
                       </div>
                     </div>
-                    <a
-                      href={analytics.whatsapp_community_link}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="w-full text-center py-2 bg-emerald-500 hover:bg-emerald-600 font-extrabold font-sans text-xs text-slate-950 rounded-lg transition-all shadow-md hover:shadow-emerald-500/10"
-                    >
-                      Join WhatsApp Community
-                    </a>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {(analytics as any)?.whatsapp_community_link && (
+                        <a
+                          href={(analytics as any).whatsapp_community_link}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="w-full text-center py-2 bg-emerald-500 hover:bg-emerald-600 font-extrabold font-sans text-xs text-slate-950 rounded-lg transition-all shadow-md hover:shadow-emerald-500/10 flex items-center justify-center gap-1.5"
+                        >
+                          <span>👥</span> Join Community
+                        </a>
+                      )}
+                      {(analytics as any)?.whatsapp_channel_link && (
+                        <a
+                          href={(analytics as any).whatsapp_channel_link}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="w-full text-center py-2 bg-teal-500 hover:bg-teal-600 font-extrabold font-sans text-xs text-slate-950 rounded-lg transition-all shadow-md hover:shadow-teal-500/10 flex items-center justify-center gap-1.5"
+                        >
+                          <span>📢</span> Follow Channel
+                        </a>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>
@@ -589,6 +622,60 @@ export default function DashboardReseller({ token, user }: DashboardResellerProp
             </div>
           )}
 
+          {/* TAB 6: REVIEWS */}
+          {activeTab === 'reviews' && (
+            <div className="space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-3 mb-4">
+                <div>
+                  <h3 className="text-lg font-medium text-slate-200">Reviews & 5-Star Ratings</h3>
+                  <p className="text-slate-400 text-xs mt-1">
+                    See feedback left by customers checking out from your storefront link: {user.store_name}
+                  </p>
+                </div>
+                <div className="bg-slate-800/60 border border-slate-705 p-3 rounded-lg flex items-center gap-3 self-start sm:self-auto">
+                  <div className="flex text-amber-500">
+                    {[1, 2, 3, 4, 5].map((s) => (
+                      <Star key={s} className="w-5 h-5 fill-amber-500 text-amber-500" />
+                    ))}
+                  </div>
+                  <div className="text-sm font-semibold text-slate-200">
+                    {reviews.length > 0 
+                      ? `${(reviews.reduce((acc, r) => acc + Number(r.rating || 5), 0) / reviews.length).toFixed(1)} / 5.0 Rating` 
+                      : '5.0 Rating'}
+                  </div>
+                </div>
+              </div>
+
+              {reviews.length === 0 ? (
+                <div className="text-center py-10 bg-slate-850/30 border border-slate-800/40 rounded-xl text-slate-500">
+                  <div className="flex items-center justify-center text-slate-600 mb-2">
+                    <Star className="w-10 h-10 stroke-1" />
+                  </div>
+                  No customers have submitted reviews yet. Share your storefront link to gather 5-star feedback!
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {reviews.map((r: any) => (
+                    <div key={r.id} className="bg-slate-850/25 border border-slate-800 p-4 rounded-xl space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="font-semibold text-slate-200 text-sm">{r.author_name}</span>
+                        <div className="flex text-amber-500">
+                          {Array.from({ length: Number(r.rating || 5) }).map((_, i) => (
+                            <Star key={i} className="w-3.5 h-3.5 fill-amber-500 text-amber-500" />
+                          ))}
+                        </div>
+                      </div>
+                      <p className="text-slate-300 text-xs italic">"{r.comment}"</p>
+                      <div className="text-[10px] text-slate-500 font-mono">
+                        {new Date(r.created_at).toLocaleDateString()}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
         </div>
       )}
 
@@ -693,7 +780,13 @@ export default function DashboardReseller({ token, user }: DashboardResellerProp
                 />
               </div>
 
-              {withdrawAmount > 0 && adminSettings && (
+              {withdrawAmount > 0 && withdrawAmount <= 5.00 && (
+                <div className="bg-rose-950/40 border border-rose-900/40 p-3 rounded-lg text-rose-300 text-xs text-center font-sans">
+                  ⚠️ Payout must be strictly above ₵5.00 GHS.
+                </div>
+              )}
+
+              {withdrawAmount > 5.00 && adminSettings && (
                 <div className="bg-slate-950/40 p-3 rounded text-xs space-y-1.5 border border-slate-800">
                   <div className="flex justify-between text-slate-450">
                     <span>Processing Retention Fee ({(adminSettings as any).withdrawal_fee_percent || 0}%):</span>
@@ -720,7 +813,7 @@ export default function DashboardReseller({ token, user }: DashboardResellerProp
                 </button>
                 <button
                   type="submit"
-                  disabled={!withdrawAmount || withdrawAmount <= 0 || withdrawAmount > analytics.balance_ghs}
+                  disabled={!withdrawAmount || withdrawAmount <= 5.00 || withdrawAmount > analytics.balance_ghs}
                   className="px-5 py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded transition disabled:opacity-40"
                 >
                   Submit claim request

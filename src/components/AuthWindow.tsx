@@ -8,11 +8,12 @@ interface AuthWindowProps {
   onAuthSuccess: (token: string, user: any) => void;
   onSetView: (v: string) => void;
   onShowPaymentNotification: (amount: number, userId: number, email: string) => void;
+  disableResellerRegister?: boolean;
 }
 
-export default function AuthWindow({ onAuthSuccess, onSetView, onShowPaymentNotification }: AuthWindowProps) {
+export default function AuthWindow({ onAuthSuccess, onSetView, onShowPaymentNotification, disableResellerRegister = false }: AuthWindowProps) {
   const [mode, setMode] = useState<'login' | 'register'>('login');
-  const [role, setRole] = useState<'customer' | 'reseller'>('customer');
+  const [role, setRole] = useState<'customer' | 'reseller'>(disableResellerRegister ? 'customer' : 'reseller');
 
   const [email, setEmail] = useState<string>('');
   const [password, setPassword] = useState<string>('');
@@ -128,29 +129,35 @@ export default function AuthWindow({ onAuthSuccess, onSetView, onShowPaymentNoti
       )}
 
       {/* Reg vs Login Options buttons */}
-      <div className="grid grid-cols-2 gap-1 bg-slate-950 p-1 rounded-xl">
-        <button
-          onClick={() => { setMode('login'); setErrorMessage(''); }}
-          className={`py-2 text-xs font-semibold uppercase rounded-lg transition ${
-            mode === 'login' ? 'bg-amber-500 text-slate-950 font-bold' : 'text-slate-400 hover:text-slate-200'
-          }`}
-        >
-          Logging In
-        </button>
-        <button
-          onClick={() => { setMode('register'); setErrorMessage(''); }}
-          className={`py-2 text-xs font-semibold uppercase rounded-lg transition ${
-            mode === 'register' ? 'bg-amber-500 text-slate-950 font-bold' : 'text-slate-400 hover:text-slate-200'
-          }`}
-        >
-          Create Storefront
-        </button>
-      </div>
+      {!disableResellerRegister ? (
+        <div className="grid grid-cols-2 gap-1 bg-slate-950 p-1 rounded-xl">
+          <button
+            onClick={() => { setMode('login'); setErrorMessage(''); }}
+            className={`py-2 text-xs font-semibold uppercase rounded-lg transition ${
+              mode === 'login' ? 'bg-amber-500 text-slate-950 font-bold' : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            Logging In
+          </button>
+          <button
+            onClick={() => { setMode('register'); setErrorMessage(''); }}
+            className={`py-2 text-xs font-semibold uppercase rounded-lg transition ${
+              mode === 'register' ? 'bg-amber-500 text-slate-950 font-bold' : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            Create Storefront
+          </button>
+        </div>
+      ) : (
+        <div className="text-center bg-slate-950/80 p-3 rounded-xl text-xs font-mono text-slate-400 border border-slate-800/50">
+          🔒 Secure Reseller Storefront Portal
+        </div>
+      )}
 
       <form onSubmit={handleSubmit} className="space-y-4 text-sm text-slate-300">
         
         {/* Toggle buyer vs seller in register mode */}
-        {mode === 'register' && (
+        {mode === 'register' && !disableResellerRegister && (
           <div className="space-y-2">
             <label className="block text-slate-450 font-mono text-xs">I want to register on Mac Hub as a:</label>
             <div className="grid grid-cols-2 gap-2">
@@ -238,8 +245,8 @@ export default function AuthWindow({ onAuthSuccess, onSetView, onShowPaymentNoti
             <div className="space-y-1">
               <label className="block text-slate-400 font-mono text-xs">My storefront URL slug</label>
               <div className="flex bg-slate-950 border border-slate-800 rounded-lg overflow-hidden p-0.5">
-                <span className="bg-slate-900 border-r border-slate-800/70 text-slate-500 p-2.5 font-mono text-xxs flex items-center">
-                  machub.com/store/
+                <span className="bg-slate-900 border-r border-slate-800/70 text-slate-500 px-2.5 py-1.5 font-mono text-xxs flex items-center">
+                  {typeof window !== 'undefined' ? window.location.host : 'localhost:3000'}/store/
                 </span>
                 <input
                   type="text"
@@ -253,7 +260,7 @@ export default function AuthWindow({ onAuthSuccess, onSetView, onShowPaymentNoti
             </div>
 
             <div className="space-y-1">
-              <label className="block text-slate-450 font-mono text-xs">Mobile money Contact Number</label>
+              <label className="block text-slate-455 font-mono text-xs">Mobile money Contact Number</label>
               <div className="relative">
                 <Phone className="absolute left-3 top-3 w-4 h-4 text-slate-500" />
                 <input
@@ -271,8 +278,16 @@ export default function AuthWindow({ onAuthSuccess, onSetView, onShowPaymentNoti
             {adminPricePolicy && adminPricePolicy.enabled && (
               <div className="p-3 bg-amber-950/20 text-amber-400 rounded-lg border border-amber-800/60 flex gap-2.5 items-start">
                 <Sparkles className="w-5 h-5 text-amber-500 shrink-0 mt-0.5 animate-pulse" />
-                <div className="text-xxs font-sans leading-normal">
+                <div className="text-xxxs font-sans leading-normal">
                   Our system currently has a resellers entry fee of <strong className="font-bold text-amber-400">₵{adminPricePolicy.fee?.toFixed(2)} GHS</strong> to mitigate platform operational database costs and unlock unlimited storefront delivery APIs.
+                </div>
+              </div>
+            )}
+            {adminPricePolicy && !adminPricePolicy.enabled && (
+              <div className="p-3 bg-emerald-950/25 text-emerald-450 rounded-lg border border-emerald-800/50 flex gap-2.5 items-start">
+                <Sparkles className="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" />
+                <div className="text-xxxs font-sans leading-normal">
+                  🎉 Platform registration is currently <strong className="font-bold text-emerald-400">absolutely FREE!</strong> Create your store now and launch your business with zero upfront fees.
                 </div>
               </div>
             )}
