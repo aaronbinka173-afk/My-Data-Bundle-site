@@ -9,11 +9,28 @@ interface AuthWindowProps {
   onSetView: (v: string) => void;
   onShowPaymentNotification: (amount: number, userId: number, email: string) => void;
   disableResellerRegister?: boolean;
+  initialMode?: 'login' | 'register';
+  initialRole?: 'customer' | 'reseller';
 }
 
-export default function AuthWindow({ onAuthSuccess, onSetView, onShowPaymentNotification, disableResellerRegister = false }: AuthWindowProps) {
-  const [mode, setMode] = useState<'login' | 'register'>('login');
-  const [role, setRole] = useState<'customer' | 'reseller'>(disableResellerRegister ? 'customer' : 'reseller');
+export default function AuthWindow({ 
+  onAuthSuccess, 
+  onSetView, 
+  onShowPaymentNotification, 
+  disableResellerRegister = false,
+  initialMode = 'login',
+  initialRole = 'reseller'
+}: AuthWindowProps) {
+  const [mode, setMode] = useState<'login' | 'register'>(initialMode);
+  const [role, setRole] = useState<'customer' | 'reseller'>(disableResellerRegister ? 'customer' : initialRole);
+
+  React.useEffect(() => {
+    setMode(initialMode);
+  }, [initialMode]);
+
+  React.useEffect(() => {
+    setRole(disableResellerRegister ? 'customer' : initialRole);
+  }, [initialRole, disableResellerRegister]);
 
   const [email, setEmail] = useState<string>('');
   const [password, setPassword] = useState<string>('');

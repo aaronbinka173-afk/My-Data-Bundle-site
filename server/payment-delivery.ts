@@ -1,4 +1,5 @@
 import { db } from './db';
+import { sendRealSms, sendRealEmail } from './notification';
 
 const DATA_API_USERNAME = process.env.DATA_API_USERNAME || 'mock_username';
 const DATA_API_KEY = process.env.DATA_API_KEY || 'mock_api_key';
@@ -171,31 +172,20 @@ export async function sendOrderStatusNotification(orderId: number, status: 'deli
       ${storeName} Customer Support
     `;
 
-    // 1. Simulate Outbound Telephony SMS Gateway
-    console.log(`\n================== AUTOMATED OUTBOUND SMS GATEWAY ==================`);
-    console.log(`[Order Reference]: ${order.order_ref}`);
-    console.log(`[Sender Mask-ID]: ${storeName.toUpperCase().replace(/[^A-Za-z0-9]/g, '').slice(0, 11) || 'NO-REPLY'}`);
-    console.log(`[Recipient Phone]: +233 ${recipientPhone}`);
-    console.log(`[Payload Message]: ${smsMessage}`);
-    console.log(`[Gateway Status]: Routed via Premium SS7/SMPP SMP 1-Way Alphanumeric Gateway (Status: Delivered successfully)`);
-    console.log(`====================================================================\n`);
+    const senderId = (storeName || 'NO-REPLY').toUpperCase().replace(/[^A-Z0-9\-]/g, '').slice(0, 11) || 'NO-REPLY';
 
-    // 2. Simulate Outbound SMTP Email Node
-    console.log(`\n================== AUTOMATED OUTBOUND SMTP NODE ==================`);
-    console.log(`[Sender Address]: noreply@mac-hub.com`);
-    console.log(`[Recipient Email]: ${recipientEmail}`);
-    console.log(`[Subject Line]: ${emailSubject}`);
-    console.log(`[Body Payload]: ${emailBody}`);
-    console.log(`[SMTP Status]: Handshake validated, TLS session compiled, Message dispatched (Status: Sent)`);
-    console.log(`==================================================================\n`);
+    // 1. Dispatch real SMS
+    const smsSent = await sendRealSms(recipientPhone, smsMessage, senderId);
+
+    // 2. Dispatch real SMTP Email
+    await sendRealEmail(recipientEmail, emailSubject, emailBody);
 
     // 3. Write SMS dispatch logs into the database so they appear in Dashboard logs!
-    const senderId = (storeName || 'NO-REPLY').toUpperCase().replace(/[^A-Z0-9\-]/g, '').slice(0, 11) || 'NO-REPLY';
     await db.createSmsLog(
       order.reseller_id || null, // reseller_id
       senderId,
       `[Automated Order Notification] ${smsMessage}`,
-      'Delivered'
+      smsSent ? 'Delivered' : 'Simulated'
     );
 
   } catch (err) {

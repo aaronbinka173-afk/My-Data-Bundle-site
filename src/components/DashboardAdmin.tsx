@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Users, BarChart3, Database, Landmark, Settings, RefreshCw, AlertCircle, CheckCircle2, XCircle, 
-  Trash2, Edit, Plus, Eye, History, Key, MessageSquare, Send, Smartphone, ShoppingCart, RotateCcw, Mail
+  Trash2, Edit, Plus, Eye, History, Key, MessageSquare, Send, Smartphone, ShoppingCart, RotateCcw, Mail, LogOut
 } from 'lucide-react';
 import { Bundle, ResellerAccount, WithdrawalRequest, Order, DataDeliveryLog, AdminSettings } from '../types';
 import CheckoutModal from './CheckoutModal';
@@ -12,6 +12,7 @@ import {
 interface DashboardAdminProps {
   token: string;
   user?: any;
+  onLogout?: () => void;
   onTypographyChange?: (
     font?: string, 
     size?: string, 
@@ -20,9 +21,26 @@ interface DashboardAdminProps {
     colorMuted?: string, 
     colorAccent?: string
   ) => void;
+  onBrandingChange?: (
+    siteName?: string,
+    siteColor?: string,
+    siteBgColor?: string,
+    siteBgImage?: string
+  ) => void;
 }
 
-export default function DashboardAdmin({ token, user, onTypographyChange }: DashboardAdminProps) {
+const isVideoMedia = (src: string) => {
+  if (!src) return false;
+  const lowercase = src.toLowerCase();
+  return src.startsWith('data:video/') || 
+         lowercase.endsWith('.mp4') || 
+         lowercase.endsWith('.webm') || 
+         lowercase.endsWith('.ogg') ||
+         lowercase.includes('video') ||
+         lowercase.includes('type=video');
+};
+
+export default function DashboardAdmin({ token, user, onLogout, onTypographyChange, onBrandingChange }: DashboardAdminProps) {
   const [activeTab, setActiveTab] = useState<'stats' | 'bundles' | 'resellers' | 'withdrawals' | 'orders' | 'logs' | 'settings'>('stats');
   
   // States
@@ -94,12 +112,16 @@ export default function DashboardAdmin({ token, user, onTypographyChange }: Dash
   const [emailSubject, setEmailSubject] = useState('');
   const [emailMessage, setEmailMessage] = useState('');
   const [emailDispatchLoading, setEmailDispatchLoading] = useState(false);
+  const [emailLogs, setEmailLogs] = useState<any[]>([]);
+  const [emailLogsLoading, setEmailLogsLoading] = useState(false);
+  const [showGatesGuide, setShowGatesGuide] = useState(false);
 
   // SubAndGain API catalog fetching and base list importing states
   const [subAndGainPlans, setSubAndGainPlans] = useState<any[]>([]);
   const [fetchingSgPlans, setFetchingSgPlans] = useState<boolean>(false);
   const [globalSgMargin, setGlobalSgMargin] = useState<string>('2.0');
   const [sgImporting, setSgImporting] = useState<boolean>(false);
+  const [preloadingSandbox, setPreloadingSandbox] = useState<boolean>(false);
 
   // Custom Confirmation Dialog State
   const [confirmDialog, setConfirmDialog] = useState<{
@@ -150,12 +172,13 @@ export default function DashboardAdmin({ token, user, onTypographyChange }: Dash
     try {
       const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
       
-      if (activeTab === 'stats') {
-        const r1 = await fetch('/api/admin/dashboard', { headers });
-        if (r1.ok) setStats(await r1.json());
-        const r7 = await fetch('/api/admin/settings', { headers });
-        if (r7.ok) setSettings(await r7.json());
-      } else if (activeTab === 'bundles') {
+      // Always fetch stats and settings to support real-time global low API wallet balance alerts
+      const r1 = await fetch('/api/admin/dashboard', { headers });
+      if (r1.ok) setStats(await r1.json());
+      const r7 = await fetch('/api/admin/settings', { headers });
+      if (r7.ok) setSettings(await r7.json());
+
+      if (activeTab === 'bundles') {
         const r2 = await fetch('/api/admin/bundles', { headers });
         if (r2.ok) setBundles(await r2.json());
       } else if (activeTab === 'resellers') {
@@ -170,9 +193,6 @@ export default function DashboardAdmin({ token, user, onTypographyChange }: Dash
       } else if (activeTab === 'logs') {
         const r6 = await fetch('/api/admin/delivery-logs', { headers });
         if (r6.ok) setDeliveryLogs(await r6.json());
-      } else if (activeTab === 'settings') {
-        const r7 = await fetch('/api/admin/settings', { headers });
-        if (r7.ok) setSettings(await r7.json());
       }
     } catch (e) {
       console.error('Fetch error:', e);
@@ -261,6 +281,49 @@ export default function DashboardAdmin({ token, user, onTypographyChange }: Dash
         }
       },
       'Delete Bundle',
+      'danger'
+    );
+  };
+
+  // Reseller deletion completely
+  const handleDeleteReseller = async (reseller: ResellerAccount) => {
+    const rId = reseller.user_id || (reseller as any).id;
+    if (!rId) {
+      showNotification('Cannot identify reseller account ID.', 'danger');
+      return;
+    }
+
+    if (reseller.email?.toLowerCase() === 'aaronbinka173@gmail.com') {
+      showNotification('The platform owner account cannot be deleted.', 'danger');
+      return;
+    }
+
+    requestConfirmation(
+      '⚠️ Delete Reseller Account Permanently?',
+      `Are you ABSOLUTELY sure you want to permanently delete the reseller account "${reseller.store_name || reseller.email}"? This action is IRREVERSIBLE and will delete their storefront record as if they never existed!`,
+      async () => {
+        setTogglingResellerId(rId);
+        try {
+          const res = await fetch(`/api/admin/resellers/${rId}`, {
+            method: 'DELETE',
+            headers: { 
+              'Authorization': `Bearer ${token}`
+            }
+          });
+          const data = await res.json().catch(() => ({}));
+          if (res.ok) {
+            showNotification(data.message || `Reseller account was permanently deleted.`, 'success');
+            fetchData();
+          } else {
+            showNotification(data.error || `Failed to delete reseller account.`, 'danger');
+          }
+        } catch (err) {
+          showNotification('Failed to delete reseller due to system error.', 'danger');
+        } finally {
+          setTogglingResellerId(null);
+        }
+      },
+      'Delete Permanently',
       'danger'
     );
   };
@@ -688,6 +751,7 @@ export default function DashboardAdmin({ token, user, onTypographyChange }: Dash
           data_api_username: settings.data_api_username,
           data_api_key: settings.data_api_key,
           data_api_url: settings.data_api_url,
+          vtu_balance_threshold: settings.vtu_balance_threshold,
         })
       });
       if (res.ok) {
@@ -696,6 +760,38 @@ export default function DashboardAdmin({ token, user, onTypographyChange }: Dash
       } else {
         const d = await res.json().catch(() => ({}));
         showNotification(d.error || 'Failed to update Data API settings.', 'danger');
+      }
+    } catch {
+      showNotification('Transmission error.', 'danger');
+    }
+  };
+
+  const handleUpdateNotificationSettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!settings) return;
+    try {
+      const res = await fetch('/api/admin/settings/notifications', {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mnotify_api_key: settings.mnotify_api_key,
+          arkesel_api_key: settings.arkesel_api_key,
+          sms_sender_id: settings.sms_sender_id,
+          smtp_host: settings.smtp_host,
+          smtp_port: settings.smtp_port,
+          smtp_user: settings.smtp_user,
+          smtp_pass: settings.smtp_pass,
+          smtp_from: settings.smtp_from,
+          smtp_from_name: settings.smtp_from_name,
+          smtp_secure: settings.smtp_secure,
+        })
+      });
+      if (res.ok) {
+        showNotification('Notification gateways (SMTP/SMS) credentials updated successfully.', 'success');
+        fetchData();
+      } else {
+        const d = await res.json().catch(() => ({}));
+        showNotification(d.error || 'Failed to update notification settings.', 'danger');
       }
     } catch {
       showNotification('Transmission error.', 'danger');
@@ -854,6 +950,55 @@ export default function DashboardAdmin({ token, user, onTypographyChange }: Dash
     }
   };
 
+  const handlePreloadSandboxDefaults = async () => {
+    setPreloadingSandbox(true);
+    try {
+      const res = await fetch('/api/admin/settings/preload-sandbox', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.ok) {
+        showNotification('Fantastic! Sandbox keys and mock accounts loaded. The system is 100% active and testable!', 'success');
+        fetchData();
+      } else {
+        showNotification('Failed to preload sandbox settings.', 'danger');
+      }
+    } catch {
+      showNotification('Network transmission error.', 'danger');
+    } finally {
+      setPreloadingSandbox(false);
+    }
+  };
+
+  const handleResetToProduction = async () => {
+    requestConfirmation(
+      '⚠️ CRITICAL: Reset Database to Live Production?',
+      'Are you absolutely sure you are ready to go live? This action will permanently WIPE all sandbox/mock accounts, customer test purchases, simulated sales logs, mock sms/email records, and test reseller balances! It remains only your system owner account in active production mode with zeroed out counters.',
+      async () => {
+        setPreloadingSandbox(true);
+        try {
+          const res = await fetch('/api/admin/settings/reset-database', {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${token}` }
+          });
+          const data = await res.json().catch(() => ({}));
+          if (res.ok) {
+            showNotification(data.message || 'Database successfully wiped and reset to active production mode!', 'success');
+            fetchData();
+          } else {
+            showNotification(data.error || 'Failed to wipe database.', 'danger');
+          }
+        } catch {
+          showNotification('Network connection error.', 'danger');
+        } finally {
+          setPreloadingSandbox(false);
+        }
+      },
+      'Wipe Database & Go Live',
+      'danger'
+    );
+  };
+
   const handleUpdateWithdrawalFee = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!settings) return;
@@ -915,12 +1060,11 @@ export default function DashboardAdmin({ token, user, onTypographyChange }: Dash
         })
       });
       if (res.ok) {
-        showNotification('Site brand settings and theme color updated! Refreshing page to apply...', 'success');
-        setTimeout(() => {
-          if (typeof window !== 'undefined') {
-            window.location.reload();
-          }
-        }, 1200);
+        showNotification('Site brand settings and theme color updated successfully!', 'success');
+        if (onBrandingChange) {
+          const bgUrl = settings.site_bg_image ? `/api/settings/bg-image?h=${settings.site_bg_image.length}` : '';
+          onBrandingChange(settings.site_name, settings.site_color, settings.site_bg_color, bgUrl);
+        }
       } else {
         const d = await res.json().catch(() => ({}));
         showNotification(d.error || 'Failed to update branding.', 'danger');
@@ -1056,6 +1200,23 @@ export default function DashboardAdmin({ token, user, onTypographyChange }: Dash
     }
   };
 
+  const fetchEmailLogs = async () => {
+    setEmailLogsLoading(true);
+    try {
+      const response = await fetch('/api/admin/email-logs', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setEmailLogs(data);
+      }
+    } catch (err) {
+      console.error('Failed to fetch Email logs:', err);
+    } finally {
+      setEmailLogsLoading(false);
+    }
+  };
+
   const handleResetResellerPasswordSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!resettingUser) return;
@@ -1163,7 +1324,7 @@ export default function DashboardAdmin({ token, user, onTypographyChange }: Dash
         showNotification(data.messagePrefix || 'SMTP Email successfully dispatched!', 'success');
         setEmailSubject('');
         setEmailMessage('');
-        setEmailModalOpen(false);
+        fetchEmailLogs();
       } else {
         showNotification(data.error || 'Failed to dispatch outbound Email.', 'danger');
       }
@@ -1229,14 +1390,49 @@ export default function DashboardAdmin({ token, user, onTypographyChange }: Dash
           <p className="text-slate-400 text-sm mt-1">Configure global pricing, manage storefronts, verify payouts and audit transaction delivery.</p>
         </div>
         
-        <button 
-          onClick={fetchData}
-          className="self-start flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 text-slate-300 text-sm hover:bg-slate-700 transition rounded-lg"
-        >
-          <RefreshCw className="w-4 h-4" />
-          Full System Refresh
-        </button>
+        <div className="flex items-center gap-2 self-start flex-wrap">
+          <button 
+            onClick={fetchData}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 text-slate-300 text-sm hover:bg-slate-700 transition rounded-lg"
+          >
+            <RefreshCw className="w-4 h-4" />
+            Full System Refresh
+          </button>
+          
+          {onLogout && (
+            <button
+              onClick={onLogout}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/25 text-sm transition rounded-lg"
+              title="End active administrator session"
+            >
+              <LogOut className="w-4 h-4" />
+              Sign Out / Disconnect
+            </button>
+          )}
+        </div>
       </div>
+
+      {stats && (stats.vtu_provider_balance_ghs ?? 124.50) < (settings?.vtu_balance_threshold !== undefined ? Number(settings.vtu_balance_threshold) : 10) && (
+        <div className="bg-rose-950/30 border border-rose-900/60 p-3.5 rounded-xl mb-6 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-lg">
+          <div className="flex items-center gap-2.5">
+            <AlertCircle className="w-5 h-5 text-rose-400 shrink-0 animate-pulse" />
+            <div className="text-left">
+              <span className="font-bold text-rose-300 text-xs sm:text-sm block">⚠️ Low SubAndGain API Provider Wallet Balance</span>
+              <span className="text-slate-405 text-xxs sm:text-xs leading-normal">
+                Your VTU provider fund of <strong className="text-rose-400 font-mono">₵{Number(stats.vtu_provider_balance_ghs ?? 124.50).toFixed(2)}</strong> has dropped below your critical threshold of <strong className="text-slate-300 font-mono">₵{Number(settings?.vtu_balance_threshold !== undefined ? settings.vtu_balance_threshold : 10).toFixed(2)}</strong>. Outbound deliverability could fail!
+              </span>
+            </div>
+          </div>
+          {activeTab !== 'stats' && (
+            <button
+              onClick={() => setActiveTab('stats')}
+              className="px-3 py-1 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 text-xs font-semibold rounded-lg transition shrink-0"
+            >
+              Top Up Wallet Funds
+            </button>
+          )}
+        </div>
+      )}
 
       {notification && (
         <div className={`p-4 rounded-lg mb-6 flex items-center gap-2 text-sm ${
@@ -1290,7 +1486,7 @@ export default function DashboardAdmin({ token, user, onTypographyChange }: Dash
             <div className="space-y-6 animate-fade-in">
               
               {/* LOW VTU BALANCE ALERT CALLOUT */}
-              {(stats.vtu_provider_balance_ghs ?? 124.50) < 10 && (
+              {(stats.vtu_provider_balance_ghs ?? 124.50) < (settings?.vtu_balance_threshold !== undefined ? Number(settings.vtu_balance_threshold) : 10) && (
                 <div className="bg-rose-950/40 border border-rose-900/60 p-4 rounded-xl flex flex-col md:flex-row items-start md:items-center justify-between gap-4 shadow-lg animate-pulse-subtle">
                   <div className="flex items-start gap-3">
                     <div className="p-2.5 bg-rose-500/10 text-rose-400 rounded-lg shrink-0 border border-rose-500/10">
@@ -1299,7 +1495,7 @@ export default function DashboardAdmin({ token, user, onTypographyChange }: Dash
                     <div>
                       <h4 className="font-bold text-slate-100 text-sm">⚠️ Critical Gateway Notice: Low VTU Provider Wallet Balance</h4>
                       <p className="text-xs text-rose-300 mt-1 leading-relaxed">
-                        Your SubAndGain API wallet balance currently stands at <span className="font-mono font-bold text-rose-400">₵{Number(stats.vtu_provider_balance_ghs ?? 124.50).toFixed(2)}</span>, which is below the safe threshold of ₵10.00. Outbound reseller bundle fulfillments could fail if this depletes!
+                        Your SubAndGain API wallet balance currently stands at <span className="font-mono font-bold text-rose-400">₵{Number(stats.vtu_provider_balance_ghs ?? 124.50).toFixed(2)}</span>, which is below your customizable threshold of ₵{Number(settings?.vtu_balance_threshold !== undefined ? settings.vtu_balance_threshold : 10).toFixed(2)}. Outbound reseller bundle fulfillments could fail if this depletes!
                       </p>
                     </div>
                   </div>
@@ -1745,6 +1941,7 @@ export default function DashboardAdmin({ token, user, onTypographyChange }: Dash
                     onClick={() => {
                       setEmailTarget('all');
                       setEmailModalOpen(true);
+                      fetchEmailLogs();
                     }}
                     className="flex items-center gap-2 bg-amber-500 hover:bg-amber-600 active:bg-amber-700 text-slate-950 px-4 py-2 rounded-lg text-xs font-extrabold shadow-lg transition"
                   >
@@ -1912,6 +2109,7 @@ export default function DashboardAdmin({ token, user, onTypographyChange }: Dash
                                   setEmailSubject(`System Notice from Mac Hub Administration`);
                                   setEmailMessage(`Dear ${r.store_name || 'Agent'},\n\nWe would like to coordinate administrative updates regarding your Ghanaian reseller account configurations.\n\nBest regards,\nAaron Binka`);
                                   setEmailModalOpen(true);
+                                  fetchEmailLogs();
                                 }}
                                 className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-emerald-400 border border-slate-750 hover:border-emerald-500/50 rounded flex items-center gap-1 text-xs font-semibold transition-colors"
                                 title="Send support Email notice to this partner reseller"
@@ -1945,6 +2143,19 @@ export default function DashboardAdmin({ token, user, onTypographyChange }: Dash
                               >
                                 {togglingResellerId === r.user_id ? 'Wait...' : r.status === 'suspended' ? 'Activate' : 'Suspend'}
                               </button>
+
+                              {/* Delete Account */}
+                              {r.email?.toLowerCase() !== 'aaronbinka173@gmail.com' && (
+                                <button
+                                  onClick={() => handleDeleteReseller(r)}
+                                  disabled={togglingResellerId === r.user_id}
+                                  className="px-2 py-1 bg-rose-600/10 hover:bg-rose-650 text-rose-400 hover:text-slate-100 border border-rose-900/40 rounded flex items-center gap-1 text-xs font-semibold overflow-hidden transition-all duration-200"
+                                  title="Permanently Purge Reseller Partner Account"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                  <span>Delete</span>
+                                </button>
+                              )}
                             </div>
                           </td>
                         </tr>
@@ -2237,6 +2448,51 @@ export default function DashboardAdmin({ token, user, onTypographyChange }: Dash
           {/* TAB 7: ADMINISTRATIVE SYSTEM CONFIGURATIONS */}
           {activeTab === 'settings' && settings && (
             <div className="space-y-6">
+
+              {/* NON-TECHNICAL SETUP ASSISTANT */}
+              <div className="bg-gradient-to-r from-amber-500/10 to-indigo-950/20 border border-amber-550/30 rounded-2xl p-6 relative overflow-hidden backdrop-blur-md">
+                <div className="absolute right-0 top-0 translate-x-12 -translate-y-12 w-64 h-64 bg-amber-500/5 rounded-full blur-3xl pointer-events-none" />
+                <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-6">
+                  <div className="space-y-2">
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-amber-400/10 text-amber-300 text-xxs font-black uppercase tracking-widest rounded-full border border-amber-500/20">
+                      💡 One-Click Setup Assistant for Aaron
+                    </span>
+                    <h3 className="text-lg font-black text-slate-100 tracking-tight">Don't have API keys yet? Test instantly with Sandbox Mode!</h3>
+                    <p className="text-slate-350 text-xs leading-relaxed max-w-3xl">
+                      We understand that getting real keys from <strong>Flutterwave, Paystack, mNotify, and SubAndGain</strong> can be tedious or confusing. 
+                      You <strong>do not need them</strong> to test your platform! With our advanced simulated gateway environment:
+                    </p>
+                    <ul className="text-slate-400 text-xs list-disc pl-5 space-y-1 mt-1 font-sans">
+                      <li>Purchases bypass actual charges and simulate successful mobile money (MoMo) payments.</li>
+                      <li>Data bundles simulate instant, successful virtual crediting over carrier networks.</li>
+                      <li>Receipt emails and SMS notifications output transparent logs inside the Admin dashboard console!</li>
+                    </ul>
+                  </div>
+
+                  <div className="flex flex-col sm:flex-row lg:flex-col gap-2.5 shrink-0 w-full lg:w-auto">
+                    <button
+                      type="button"
+                      onClick={handlePreloadSandboxDefaults}
+                      disabled={preloadingSandbox}
+                      className="flex items-center justify-center gap-2 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-550 text-slate-950 font-black text-xs px-6 py-3.5 rounded-xl uppercase tracking-wider transition-all duration-200 transform hover:scale-[1.02] active:scale-[0.98] shadow-lg shadow-amber-500/10 disabled:opacity-50 w-full sm:w-auto"
+                    >
+                      <RefreshCw className={`w-4 h-4 ${preloadingSandbox ? 'animate-spin' : ''}`} />
+                      {preloadingSandbox ? 'Setting Up...' : '⚡ Configure Sandbox Keys'}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleResetToProduction}
+                      disabled={preloadingSandbox}
+                      className="flex items-center justify-center gap-2 bg-gradient-to-r from-rose-600 to-rose-700 hover:from-rose-700 hover:to-rose-650 text-slate-100 font-extrabold text-xs px-6 py-3.5 rounded-xl uppercase tracking-wider transition-all duration-200 transform hover:scale-[1.02] active:scale-[0.98] shadow-lg shadow-rose-600/10 disabled:opacity-50 w-full sm:w-auto"
+                      title="Wipe all simulation counters, purge test users, deactivate test mode, and launch real production figures."
+                    >
+                      <Trash2 className="w-4 h-4" />
+                      <span>🧹 Wipe Demo Data (Go Live)</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
               
               {/* Sandbox mode section */}
               <div className="bg-slate-800/40 p-5 rounded-xl border border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
@@ -2496,11 +2752,11 @@ export default function DashboardAdmin({ token, user, onTypographyChange }: Dash
                         </div>
                       </div>
                       <div>
-                        <label className="text-slate-400 text-xs font-mono block mb-1">Imported Background Image (Photo URL or Gallery Upload)</label>
+                        <label className="text-slate-400 text-xs font-mono block mb-1">Imported Background (Photo/Video URL or Gallery Upload)</label>
                         <div className="space-y-2">
                           <input
                             type="text"
-                            placeholder="https://images.unsplash.com/photo-..."
+                            placeholder="https://example.com/video.mp4"
                             value={settings.site_bg_image || ''}
                             onChange={(e) => setSettings({ ...settings, site_bg_image: e.target.value })}
                             className="w-full bg-slate-900 border border-slate-700 focus:border-amber-500 p-2 text-sm text-slate-200 rounded focus:outline-none"
@@ -2508,23 +2764,84 @@ export default function DashboardAdmin({ token, user, onTypographyChange }: Dash
                           
                           <div className="flex items-center gap-2">
                             <label className="flex-1 flex flex-col items-center justify-center border border-dashed border-slate-700 hover:border-amber-500 bg-slate-940 hover:bg-slate-800/40 p-2.5 rounded cursor-pointer transition">
-                              <span className="text-[11px] text-amber-500 font-semibold">📁 Select Image from Device Gallery...</span>
-                              <span className="text-[9px] text-slate-500 font-mono mt-0.5">Supports standard images</span>
+                              <span className="text-[11px] text-amber-500 font-semibold">📁 Select Image/Video from Device Gallery...</span>
+                              <span className="text-[9px] text-slate-500 font-mono mt-0.5">Supports images & videos (direct uploads under 700KB, or external URL)</span>
                               <input 
                                 type="file" 
-                                accept="image/*" 
+                                accept="image/*,video/*" 
                                 className="hidden"
                                 onChange={(e) => {
                                   const file = e.target.files?.[0];
                                   if (file) {
-                                    if (file.size > 2 * 1024 * 1024) {
-                                      alert("This picture exceeds the 2MB size limit. Please select a smaller or compressed image.");
+                                    if (file.type.startsWith('video/')) {
+                                      if (file.size > 700 * 1024) {
+                                        alert("Because this app runs with a Firestore cloud database, direct device video uploads are restricted to under 700KB to stay within cloud storage constraints. \n\nFor larger or high-resolution background videos, please paste any direct external URL (MP4/WebM) in the input field above, which will stream with zero latency at any file size!");
+                                        return;
+                                      }
+                                    } else if (file.size > 12 * 1024 * 1024) {
+                                      alert("This file is too large. Please select an image under 12MB, which will be optimized automatically.");
                                       return;
                                     }
                                     const reader = new FileReader();
                                     reader.onload = (event) => {
-                                      if (event.target?.result) {
-                                        setSettings({ ...settings, site_bg_image: event.target.result as string });
+                                      const rawResult = event.target?.result as string;
+                                      if (rawResult) {
+                                        if (file.type.startsWith('image/')) {
+                                          const img = new Image();
+                                          img.src = rawResult;
+                                          img.onload = () => {
+                                            const max_width = 1000;
+                                            const max_height = 650;
+                                            let width = img.width;
+                                            let height = img.height;
+                                            if (width > max_width || height > max_height) {
+                                              if (width > height) {
+                                                height *= max_width / width;
+                                                width = max_width;
+                                              } else {
+                                                width *= max_height / height;
+                                                height = max_height;
+                                              }
+                                            }
+                                            
+                                            // Adaptive compression to guarantee base64 image length stays safely under 900 thousand characters
+                                            const loopCompress = (imgObj: HTMLImageElement, q: number, w: number, h: number) => {
+                                              const canvas = document.createElement('canvas');
+                                              canvas.width = Math.round(w);
+                                              canvas.height = Math.round(h);
+                                              const ctx = canvas.getContext('2d');
+                                              if (ctx) {
+                                                ctx.drawImage(imgObj, 0, 0, canvas.width, canvas.height);
+                                                const compressed = canvas.toDataURL('image/jpeg', q);
+                                                if (compressed.length > 900000 && (w > 320 || h > 240 || q > 0.2)) {
+                                                  // Downscale more aggressively and reduce quality to fit database limits
+                                                  loopCompress(imgObj, Math.max(0.15, q - 0.15), w * 0.75, h * 0.75);
+                                                } else {
+                                                  setSettings({ ...settings, site_bg_image: compressed });
+                                                }
+                                              } else {
+                                                setSettings({ ...settings, site_bg_image: rawResult.length < 950000 ? rawResult : '' });
+                                                if (rawResult.length >= 950000) {
+                                                  alert("This image is too large for the database. Please select a compressed image or use a direct URL.");
+                                                }
+                                              }
+                                            };
+                                            
+                                            loopCompress(img, 0.75, width, height);
+                                          };
+                                          img.onerror = () => {
+                                            setSettings({ ...settings, site_bg_image: rawResult.length < 950000 ? rawResult : '' });
+                                            if (rawResult.length >= 950000) {
+                                              alert("Failed to load or optimize this image.");
+                                            }
+                                          };
+                                        } else {
+                                          if (rawResult.length < 950000) {
+                                            setSettings({ ...settings, site_bg_image: rawResult });
+                                          } else {
+                                            alert("Even though the video is small, its encoded size exceeds database limits. Please compress it further or use an external link.");
+                                          }
+                                        }
                                       }
                                     };
                                     reader.readAsDataURL(file);
@@ -2544,19 +2861,25 @@ export default function DashboardAdmin({ token, user, onTypographyChange }: Dash
                             )}
                           </div>
                           
-                          {settings.site_bg_image && settings.site_bg_image.startsWith('data:') && (
+                          {settings.site_bg_image && (settings.site_bg_image.startsWith('data:') || settings.site_bg_image.startsWith('http')) && (
                             <div className="flex items-center gap-2 bg-slate-900 p-2 rounded border border-slate-800">
-                              <div className="w-8 h-8 rounded overflow-hidden bg-slate-950 shrink-0 border border-slate-800">
-                                <img src={settings.site_bg_image} alt="Upload Preview" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                              <div className="w-8 h-8 rounded overflow-hidden bg-slate-950 shrink-0 border border-slate-800 flex items-center justify-center">
+                                {isVideoMedia(settings.site_bg_image) ? (
+                                  <video src={settings.site_bg_image} muted className="w-full h-full object-cover" />
+                                ) : (
+                                  <img src={settings.site_bg_image} alt="Upload Preview" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                                )}
                               </div>
                               <div className="min-w-0 flex-1">
-                                <p className="text-[9px] text-emerald-400 font-bold font-mono">✓ Gallery Image Loaded</p>
+                                <p className="text-[9px] text-emerald-400 font-bold font-mono">
+                                  ✓ Gallery {isVideoMedia(settings.site_bg_image) ? 'Video' : 'Image'} Loaded
+                                </p>
                                 <p className="text-[8px] text-slate-500 font-mono truncate">{settings.site_bg_image.substring(0, 45)}...</p>
                               </div>
                             </div>
                           )}
                         </div>
-                        <p className="text-slate-500 text-[10px] mt-0.5">Leave blank to use base theme solid color. Upload an image from your device gallery or specify an external link.</p>
+                        <p className="text-slate-500 text-[10px] mt-0.5">Leave blank to use base theme solid color. Upload an image or video from your device gallery, or specify an external link.</p>
                       </div>
                     </div>
                   </div>
@@ -3033,7 +3356,7 @@ export default function DashboardAdmin({ token, user, onTypographyChange }: Dash
                 </div>
 
                 <form onSubmit={handleUpdateDataApiSettings} className="space-y-4">
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
                     <div className="space-y-1.5">
                       <label className="text-slate-450 text-[10px] block font-mono uppercase">API Base Endpoint URL</label>
                       <input
@@ -3069,6 +3392,20 @@ export default function DashboardAdmin({ token, user, onTypographyChange }: Dash
                         className="w-full bg-slate-900 border border-slate-700 focus:border-amber-500 p-2 text-xs font-mono text-slate-200  rounded focus:outline-none"
                       />
                     </div>
+
+                    <div className="space-y-1.5">
+                      <label className="text-slate-450 text-[10px] block font-mono uppercase">Critical Balance Threshold (₵ GHS)</label>
+                      <input
+                        type="number"
+                        required
+                        min="0"
+                        step="0.01"
+                        value={settings.vtu_balance_threshold !== undefined ? settings.vtu_balance_threshold : 10}
+                        onChange={(e) => setSettings({ ...settings, vtu_balance_threshold: Number(e.target.value) })}
+                        placeholder="10.00"
+                        className="w-full bg-slate-900 border border-slate-700 focus:border-amber-500 p-2 text-xs font-mono text-slate-200 rounded focus:outline-none"
+                      />
+                    </div>
                   </div>
 
                   <div className="flex justify-end pt-2 border-t border-slate-800">
@@ -3077,6 +3414,227 @@ export default function DashboardAdmin({ token, user, onTypographyChange }: Dash
                       className="px-6 py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold text-xs rounded transition uppercase tracking-wide"
                     >
                       Save Dispatcher API Credentials
+                    </button>
+                  </div>
+                </form>
+              </div>
+
+              {/* Email (SMTP) & Outbound SMS API Gateways configuration */}
+              <div className="bg-slate-800/20 p-6 rounded-xl border border-slate-800 space-y-4">
+                <div className="flex flex-col gap-3">
+                  <div className="flex items-center justify-between">
+                    <h4 className="font-semibold text-slate-105 flex items-center gap-1.5">
+                      <span>Configure Outbound Email (SMTP) & SMS Gateways (No-Reply Channel)</span>
+                    </h4>
+                    <button
+                      type="button"
+                      onClick={() => setShowGatesGuide(!showGatesGuide)}
+                      className="text-xxs font-extrabold uppercase bg-amber-500 hover:bg-amber-600 text-slate-950 px-2.5 py-1.5 rounded shadow-md transition flex items-center gap-1"
+                    >
+                      <span>{showGatesGuide ? 'Hide Credentials Guide' : '🔑 View Credentials Setup Guide'}</span>
+                    </button>
+                  </div>
+                  <p className="text-slate-400 text-xs mt-1">
+                    Manage credentials for sending receipt emails and broadcast SMS to your resellers and end-consumers. 
+                    <strong> Note:</strong> Setting an <em>Alphanumeric Sender ID</em> (e.g., <code>MAC-HUB</code>) forces the SMS into a one-way channel, meaning recipient phones will prevent them from replying back.
+                  </p>
+                </div>
+
+                {/* EXPANDABLE CRITICAL DOCUMENTATION FOR AARON BINKA */}
+                {showGatesGuide && (
+                  <div className="bg-slate-950 border border-amber-500/30 p-5 rounded-lg space-y-4 font-sans animate-fadeIn text-xs leading-relaxed text-slate-300">
+                    <div className="flex items-center gap-2 border-b border-slate-800 pb-2">
+                      <span className="text-amber-500 font-bold text-sm">💡 Step-by-Step Ghana SMS & Email Setup Tutorial</span>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      {/* SMS Guide */}
+                      <div className="space-y-2">
+                        <h5 className="font-bold text-amber-400 font-mono text-[11px] uppercase tracking-wider">🇬🇭 Ghana SMS Gateways (mNotify or Arkesel)</h5>
+                        <p>To acquire live API keys to send physical SMS messages to your agents:</p>
+                        <ol className="list-decimal pl-4 space-y-1.5">
+                          <li>
+                            Sign up for an account at 
+                            <a href="https://mnotify.com" target="_blank" rel="noopener noreferrer" className="text-amber-400 hover:underline font-bold ml-1">mNotify.com</a> or 
+                            <a href="https://arkesel.com" target="_blank" rel="noopener noreferrer" className="text-amber-400 hover:underline font-bold ml-1">Arkesel.com</a>.
+                          </li>
+                          <li>
+                            Top up your balance on their portal (SMS credits cost around 2-3 Pesewas per SMS).
+                          </li>
+                          <li>
+                            Go to your profile or developer menu to generate an <strong>API Key</strong>.
+                          </li>
+                          <li>
+                            Copy that key and paste it in the corresponding gateway field below.
+                          </li>
+                          <li>
+                            Register a custom Sender ID (e.g., <code>MAC-HUB</code>) on their portal. Once approved, enter it in the Sender ID field below.
+                          </li>
+                        </ol>
+                      </div>
+
+                      {/* SMTP Guide */}
+                      <div className="space-y-2">
+                        <h5 className="font-bold text-amber-400 font-mono text-[11px] uppercase tracking-wider">📧 Outbound Email SMTP Server (Gmail / Private Mail)</h5>
+                        <p>To configure receipt emails using common SMTP providers like Gmail:</p>
+                        <ol className="list-decimal pl-4 space-y-1.5">
+                          <li>
+                            <strong>SMTP Host:</strong> Use <code>smtp.gmail.com</code> (for Gmail) or <code>mail.yourdomain.com</code> (for private corporate mail).
+                          </li>
+                          <li>
+                            <strong>SMTP Port:</strong> Use <code>465</code> (with Secure SSL checked) or <code>587</code> (with SSL unchecked).
+                          </li>
+                          <li>
+                            <strong>SMTP Username:</strong> Put your full email address (e.g. <code>aaronbinka173@gmail.com</code>).
+                          </li>
+                          <li>
+                            <strong>SMTP Password:</strong> If using Gmail, you cannot use your regular login password. You must generate an <strong>App Password</strong>:
+                            <ul className="list-disc pl-4 mt-1 font-mono text-[10px] text-amber-300 select-text leading-snug">
+                              <li>Go to Google Account Settings</li>
+                              <li>Enable 2-Step Verification (first required step)</li>
+                              <li>Search for "App Passwords"</li>
+                              <li>Create a password labeled "Mac Hub"</li>
+                              <li>Copy the 16-character code and paste it below</li>
+                            </ul>
+                          </li>
+                        </ol>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                <form onSubmit={handleUpdateNotificationSettings} className="space-y-6">
+                  {/* SMS Gateways Column Grid */}
+                  <div className="bg-slate-900/30 p-4 rounded-lg border border-slate-850 space-y-4">
+                    <span className="font-bold text-slate-200 text-xs uppercase tracking-wider block border-b border-slate-800 pb-2">Outbound SMS Settings (mNotify / Arkesel)</span>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <div>
+                        <label className="text-slate-450 text-[10px] block mb-1 font-mono uppercase">mNotify SMS API Key</label>
+                        <input
+                          type="password"
+                          value={settings.mnotify_api_key || ''}
+                          onChange={(e) => setSettings({ ...settings, mnotify_api_key: e.target.value })}
+                          placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                          className="w-full bg-slate-900 border border-slate-700 focus:border-amber-500 p-2 text-xs font-mono text-slate-250 rounded focus:outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-slate-450 text-[10px] block mb-1 font-mono uppercase">Arkesel SMS API Key</label>
+                        <input
+                          type="password"
+                          value={settings.arkesel_api_key || ''}
+                          onChange={(e) => setSettings({ ...settings, arkesel_api_key: e.target.value })}
+                          placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                          className="w-full bg-slate-900 border border-slate-700 focus:border-amber-500 p-2 text-xs font-mono text-slate-250 rounded focus:outline-none"
+                        />
+                      </div>
+                      <div>
+                        <div className="flex justify-between items-center mb-1">
+                          <label className="text-slate-450 text-[10px] block font-mono uppercase">Alphanumeric Sender ID (No-Reply)</label>
+                          <span className="text-[9px] text-amber-500 font-bold uppercase tracking-wide">Blocks Replies!</span>
+                        </div>
+                        <input
+                          type="text"
+                          maxLength={11}
+                          value={settings.sms_sender_id || ''}
+                          onChange={(e) => setSettings({ ...settings, sms_sender_id: e.target.value })}
+                          placeholder="MACDATAHUB"
+                          className="w-full bg-slate-900 border border-slate-700 focus:border-amber-500 p-2 text-xs font-mono text-slate-200 rounded focus:outline-none"
+                        />
+                      </div>
+                    </div>
+                    <p className="text-slate-500 text-[10px]">
+                      * Alphanumeric Sender IDs must be 11 characters or less, contain no spaces, and consist only of letters, numbers, or hyphens.
+                    </p>
+                  </div>
+
+                  {/* SMTP Server Configurations */}
+                  <div className="bg-slate-900/30 p-4 rounded-lg border border-slate-850 space-y-4">
+                    <span className="font-bold text-slate-200 text-xs uppercase tracking-wider block border-b border-slate-800 pb-2">Outbound SMTP Email Server Settings</span>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+                      <div>
+                        <label className="text-slate-450 text-[10px] block mb-1 font-mono uppercase">SMTP Hostname</label>
+                        <input
+                          type="text"
+                          value={settings.smtp_host || ''}
+                          onChange={(e) => setSettings({ ...settings, smtp_host: e.target.value })}
+                          placeholder="smtp.gmail.com"
+                          className="w-full bg-slate-900 border border-slate-700 focus:border-amber-500 p-2 text-xs font-mono text-slate-200 rounded focus:outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-slate-450 text-[10px] block mb-1 font-mono uppercase">SMTP Port</label>
+                        <input
+                          type="text"
+                          value={settings.smtp_port || ''}
+                          onChange={(e) => setSettings({ ...settings, smtp_port: e.target.value })}
+                          placeholder="465"
+                          className="w-full bg-slate-900 border border-slate-705 focus:border-amber-500 p-2 text-xs font-mono text-slate-200 rounded focus:outline-none"
+                        />
+                      </div>
+                      <div className="flex items-end pb-3">
+                        <label className="flex items-center gap-2 cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            checked={settings.smtp_secure === 'true' || settings.smtp_secure === true}
+                            onChange={(e) => setSettings({ ...settings, smtp_secure: e.target.checked })}
+                            className="rounded border-slate-700 bg-slate-950 text-amber-500 focus:ring-amber-500"
+                          />
+                          <span className="text-xs text-slate-300">Force Secure SSL (Ports 465/SSL)</span>
+                        </label>
+                      </div>
+
+                      <div>
+                        <label className="text-slate-450 text-[10px] block mb-1 font-mono uppercase font-bold">SMTP Username / Email Address</label>
+                        <input
+                          type="text"
+                          value={settings.smtp_user || ''}
+                          onChange={(e) => setSettings({ ...settings, smtp_user: e.target.value })}
+                          placeholder="alerts@mac-hub.com"
+                          className="w-full bg-slate-900 border border-slate-700 focus:border-amber-500 p-2 text-xs font-mono text-slate-200 rounded focus:outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-slate-450 text-[10px] block mb-1 font-mono uppercase font-bold">SMTP Password / App Secret</label>
+                        <input
+                          type="password"
+                          value={settings.smtp_pass || ''}
+                          onChange={(e) => setSettings({ ...settings, smtp_pass: e.target.value })}
+                          placeholder="••••••••••••••••"
+                          className="w-full bg-slate-900 border border-slate-700 focus:border-amber-500 p-2 text-xs font-mono text-slate-250 rounded focus:outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-slate-450 text-[10px] block mb-1 font-mono uppercase">Sender Display Name</label>
+                        <input
+                          type="text"
+                          value={settings.smtp_from_name || ''}
+                          onChange={(e) => setSettings({ ...settings, smtp_from_name: e.target.value })}
+                          placeholder="Mac Data Hub"
+                          className="w-full bg-slate-900 border border-slate-700 focus:border-amber-500 p-2 text-xs font-sans text-slate-200 rounded focus:outline-none"
+                        />
+                      </div>
+
+                      <div className="col-span-1 sm:col-span-2 md:col-span-3">
+                        <label className="text-slate-450 text-[10px] block mb-1 font-mono uppercase">Reply-To / From Sender Email Address</label>
+                        <input
+                          type="text"
+                          value={settings.smtp_from || ''}
+                          onChange={(e) => setSettings({ ...settings, smtp_from: e.target.value })}
+                          placeholder="noreply@mac-hub.com"
+                          className="w-full bg-slate-900 border border-slate-700 focus:border-amber-500 p-3 text-xs font-mono text-slate-200 rounded focus:outline-none"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Submission Row */}
+                  <div className="flex justify-end pt-2 border-t border-slate-800">
+                    <button
+                      type="submit"
+                      className="px-6 py-2.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs rounded-lg transition uppercase tracking-wide cursor-pointer"
+                    >
+                      Save Notification Gateway Credentials
                     </button>
                   </div>
                 </form>
@@ -3746,6 +4304,66 @@ export default function DashboardAdmin({ token, user, onTypographyChange }: Dash
                 </div>
 
               </form>
+
+              {/* Historical Email Broadcast Logs */}
+              <div className="border-t border-slate-800 pt-5 space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="font-bold text-sm text-slate-200 uppercase font-mono tracking-wider">Historical Email Broadcast Receipts</h4>
+                  <button
+                    onClick={fetchEmailLogs}
+                    className="text-xxs text-amber-500 hover:text-amber-400 transition flex items-center gap-1 font-mono font-bold animate-pulse"
+                  >
+                    <RefreshCw className={`w-3 h-3 ${emailLogsLoading ? 'animate-spin' : ''}`} />
+                    Refresh Logs
+                  </button>
+                </div>
+
+                {emailLogsLoading && emailLogs.length === 0 ? (
+                  <div className="py-6 text-center text-slate-500 text-xs font-sans">Loading outbound email records...</div>
+                ) : emailLogs.length === 0 ? (
+                  <div className="p-8 text-center bg-slate-950/30 border border-slate-800/50 rounded-lg text-slate-500 text-xs font-sans">
+                    No outbound Email logs recorded yet. Composing and dispatching a message above will populate the routing queue.
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto max-h-56 border border-slate-850 rounded-lg">
+                    <table className="w-full text-left text-xs border-collapse">
+                      <thead>
+                        <tr className="bg-slate-950/70 border-b border-slate-850 text-slate-400 uppercase font-mono text-[10px]">
+                          <th className="py-2.5 px-3">Date / Stamp</th>
+                          <th className="py-2.5 px-3">Recipient Store</th>
+                          <th className="py-2.5 px-3">Subject Line</th>
+                          <th className="py-2.5 px-3 text-right">Delivery Route</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {emailLogs.map((log: any) => (
+                          <tr key={log.id} className="border-b border-slate-850 bg-slate-900 hover:bg-slate-850/30 text-slate-300">
+                            <td className="py-2 px-3 font-mono text-[10px] text-slate-500">{new Date(log.created_at).toLocaleString()}</td>
+                            <td className="py-2 px-3">
+                              <span className="font-semibold text-slate-250 block max-w-[12rem] truncate">{log.store_name || 'N/A'}</span>
+                              <span className="text-[10px] font-mono text-slate-500 block max-w-[12rem] truncate">{log.recipientEmail || log.email || 'N/A'}</span>
+                            </td>
+                            <td className="py-2 px-3">
+                              <span className="font-semibold block text-slate-200 max-w-[15rem] truncate" title={log.subject}>{log.subject}</span>
+                            </td>
+                            <td className="py-2 px-3 text-right">
+                              {log.status === 'Delivered' ? (
+                                <span className="px-1.5 py-0.5 bg-emerald-950/50 text-emerald-400 border border-emerald-900/30 rounded text-[9px] uppercase font-bold">
+                                  ✓ SENT SMTP
+                                </span>
+                              ) : (
+                                <span className="px-1.5 py-0.5 bg-slate-800 text-amber-500 border border-amber-900/30 rounded text-[9px] uppercase font-bold" title="No custom SMTP credentials stored in settings. Safe Sandbox level dispatch simulated.">
+                                  ⚡ SIMULATED (SANDBOX)
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
             </div>
 
           </div>

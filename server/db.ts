@@ -34,6 +34,7 @@ interface JsonDatabase {
   data_delivery_logs: any[];
   admin_settings: Record<string, any>;
   sms_logs?: any[];
+  email_logs?: any[];
   ratings_reviews?: any[];
 }
 
@@ -79,7 +80,8 @@ export async function initDb() {
           customer_tax_flat_ghs: '0',
           reviews_popup_enabled: 'true',
           reviews_display_duration: '5',
-          reviews_interval: '20'
+          reviews_interval: '20',
+          vtu_balance_threshold: '10'
         };
         const combinedSettings = { ...defaultSettings, ...settings };
         for (const [key, val] of Object.entries(combinedSettings)) {
@@ -394,6 +396,7 @@ export async function initDb() {
       await insertSettingIfNotExist('reviews_popup_enabled', 'true');
       await insertSettingIfNotExist('reviews_display_duration', '5');
       await insertSettingIfNotExist('reviews_interval', '20');
+      await insertSettingIfNotExist('vtu_balance_threshold', '10');
 
       // Alter tables for newly introduced columns
       await pool.query(`
@@ -921,6 +924,27 @@ export const db = {
     }
   },
 
+  async deleteUser(id: number): Promise<boolean> {
+    if (isFirestore) return firebaseDb.deleteUser(id);
+    if (isPg && pool) {
+      await pool.query("DELETE FROM reseller_accounts WHERE user_id = $1", [id]);
+      await pool.query("DELETE FROM reseller_pricing WHERE reseller_id = $1", [id]);
+      await pool.query("DELETE FROM users WHERE id = $1", [id]);
+      return true;
+    } else {
+      const jdb = loadJsonDb();
+      jdb.users = (jdb.users || []).filter(u => u.id !== id);
+      if (jdb.reseller_accounts) {
+        jdb.reseller_accounts = jdb.reseller_accounts.filter(a => a.user_id !== id);
+      }
+      if (jdb.reseller_pricing) {
+        jdb.reseller_pricing = jdb.reseller_pricing.filter(p => p.reseller_id !== id);
+      }
+      saveJsonDb(jdb);
+      return true;
+    }
+  },
+
   async createSmsLog(resellerId: number | null, senderId: string, message: string, status: string): Promise<any> {
     if (isFirestore) return firebaseDb.createSmsLog(resellerId, senderId, message, status);
     const createdAt = new Date().toISOString();
@@ -987,6 +1011,89 @@ export const db = {
       // Sort desc
       return joined.sort((a, b) => b.id - a.id).slice(0, 100);
     }
+  },
+
+  async createEmailLog(resellerId: number | null, subject: string, message: string, status: string): Promise<any> {
+    if (isFirestore) return firebaseDb.createEmailLog(resellerId, subject, message, status);
+    const createdAt = new Date().toISOString();
+    if (isPg && pool) {
+      try {
+        await pool.query(
+          `CREATE TABLE IF NOT EXISTS email_logs (
+            id SERIAL PRIMARY KEY,
+            reseller_id INTEGER,
+            subject TEXT,
+            message TEXT,
+            status TEXT,
+            created_at TIMESTAMP DEFAULT NOW()
+          )`
+        );
+        const res = await pool.query(
+          `INSERT INTO email_logs (reseller_id, subject, message, status, created_at)
+           VALUES ($1, $2, $3, $4, NOW()) RETURNING *`,
+          [resellerId, subject, message, status]
+        );
+        return res.rows[0];
+      } catch (err) {
+        console.warn('Postgres email_logs error:', err);
+      }
+    }
+    const jdb = loadJsonDb();
+    const newId = jdb.email_logs && jdb.email_logs.length > 0 ? Math.max(...jdb.email_logs.map(log => log.id || 0)) + 1 : 1;
+    const logObj = {
+      id: newId,
+      reseller_id: resellerId,
+      subject,
+      message,
+      status,
+      created_at: createdAt
+    };
+    if (!jdb.email_logs) {
+      jdb.email_logs = [];
+    }
+    jdb.email_logs.push(logObj);
+    saveJsonDb(jdb);
+    return logObj;
+  },
+
+  async getEmailLogs(): Promise<any[]> {
+    if (isFirestore) {
+      const logs = await firebaseDb.getEmailLogs();
+      const usersCol = await firebaseDb.getUsers();
+      return logs.map(l => {
+        const u = usersCol.find(user => user.id === l.reseller_id);
+        return {
+          ...l,
+          store_name: u ? u.store_name : null,
+          email: u ? u.email : null
+        };
+      });
+    }
+    if (isPg && pool) {
+      try {
+        const res = await pool.query(
+          `SELECT l.*, u.store_name, u.email 
+           FROM email_logs l 
+           LEFT JOIN users u ON l.reseller_id = u.id 
+           ORDER BY l.id DESC LIMIT 100`
+        );
+        return res.rows;
+      } catch (err) {
+        console.warn('Postgres getEmailLogs error:', err);
+      }
+    }
+    const jdb = loadJsonDb();
+    const logs = jdb.email_logs || [];
+    const users = jdb.users || [];
+    const joined = logs.map(l => {
+      const u = users.find(user => user.id === l.reseller_id);
+      return {
+        ...l,
+        store_name: u ? u.store_name : null,
+        email: u ? u.email : null
+      };
+    });
+    return joined.sort((a, b) => b.id - a.id).slice(0, 100);
   },
 
   // --- BUNDLES ---
@@ -1738,7 +1845,11 @@ export const db = {
 
   // --- ADMIN SETTINGS ---
   async getSettings(): Promise<any> {
-    if (isFirestore) {
+    if ((global as any).isCached && (global as any).cachedAdminSettings) {
+      return (global as any).cachedAdminSettings;
+    }
+    const fetchFresh = async () => {
+      if (isFirestore) {
       const settings = await firebaseDb.getSettings();
       return {
         registration_fee_ghs: settings.registration_fee_ghs !== undefined ? Number(settings.registration_fee_ghs) : 50.00,
@@ -1771,6 +1882,7 @@ export const db = {
         customer_tax_flat_ghs: settings.customer_tax_flat_ghs !== undefined ? Number(settings.customer_tax_flat_ghs) : 0.00,
         admin_total_withdrawn_ghs: settings.admin_total_withdrawn_ghs !== undefined ? Number(settings.admin_total_withdrawn_ghs) : 0.00,
         admin_withdrawal_logs: settings.admin_withdrawal_logs !== undefined ? String(settings.admin_withdrawal_logs) : '[]',
+        admin_forfeited_reseller_profit: settings.admin_forfeited_reseller_profit !== undefined ? Number(settings.admin_forfeited_reseller_profit) : 0.00,
         site_bg_color: settings.site_bg_color !== undefined ? String(settings.site_bg_color) : '',
         site_bg_image: settings.site_bg_image !== undefined ? String(settings.site_bg_image) : '',
         online_support_enabled: settings.online_support_enabled ?? true,
@@ -1778,6 +1890,7 @@ export const db = {
         reviews_popup_enabled: settings.reviews_popup_enabled ?? true,
         reviews_display_duration: settings.reviews_display_duration !== undefined ? Number(settings.reviews_display_duration) : 5,
         reviews_interval: settings.reviews_interval !== undefined ? Number(settings.reviews_interval) : 20,
+        vtu_balance_threshold: settings.vtu_balance_threshold !== undefined ? Number(settings.vtu_balance_threshold) : 10,
       };
     }
     if (isPg && pool) {
@@ -1787,7 +1900,7 @@ export const db = {
         let val: any = r.setting_value;
         if (r.setting_key === 'registration_fee_enabled' || r.setting_key === 'test_mode_enabled' || r.setting_key === 'customer_tax_enabled' || r.setting_key === 'online_support_enabled' || r.setting_key === 'reviews_popup_enabled') {
           val = r.setting_value === 'true';
-        } else if (r.setting_key === 'registration_fee_ghs' || r.setting_key === 'max_markup_percent' || r.setting_key === 'admin_fee_percent' || r.setting_key === 'withdrawal_fee_percent' || r.setting_key === 'customer_tax_percent' || r.setting_key === 'customer_tax_flat_ghs' || r.setting_key === 'admin_total_withdrawn_ghs' || r.setting_key === 'reviews_display_duration' || r.setting_key === 'reviews_interval') {
+        } else if (r.setting_key === 'registration_fee_ghs' || r.setting_key === 'max_markup_percent' || r.setting_key === 'admin_fee_percent' || r.setting_key === 'withdrawal_fee_percent' || r.setting_key === 'customer_tax_percent' || r.setting_key === 'customer_tax_flat_ghs' || r.setting_key === 'admin_total_withdrawn_ghs' || r.setting_key === 'reviews_display_duration' || r.setting_key === 'reviews_interval' || r.setting_key === 'vtu_balance_threshold' || r.setting_key === 'admin_forfeited_reseller_profit') {
           val = Number(r.setting_value);
         }
         settings[r.setting_key] = val;
@@ -1823,6 +1936,7 @@ export const db = {
         customer_tax_flat_ghs: settings.customer_tax_flat_ghs !== undefined ? settings.customer_tax_flat_ghs : 0.00,
         admin_total_withdrawn_ghs: settings.admin_total_withdrawn_ghs !== undefined ? Number(settings.admin_total_withdrawn_ghs) : 0.00,
         admin_withdrawal_logs: settings.admin_withdrawal_logs !== undefined ? String(settings.admin_withdrawal_logs) : '[]',
+        admin_forfeited_reseller_profit: settings.admin_forfeited_reseller_profit !== undefined ? Number(settings.admin_forfeited_reseller_profit) : 0.00,
         site_bg_color: settings.site_bg_color !== undefined ? String(settings.site_bg_color) : '',
         site_bg_image: settings.site_bg_image !== undefined ? String(settings.site_bg_image) : '',
         online_support_enabled: settings.online_support_enabled ?? true,
@@ -1830,6 +1944,7 @@ export const db = {
         reviews_popup_enabled: settings.reviews_popup_enabled ?? true,
         reviews_display_duration: settings.reviews_display_duration !== undefined ? Number(settings.reviews_display_duration) : 5,
         reviews_interval: settings.reviews_interval !== undefined ? Number(settings.reviews_interval) : 20,
+        vtu_balance_threshold: settings.vtu_balance_threshold !== undefined ? Number(settings.vtu_balance_threshold) : 10,
       };
     } else {
       const jdb = loadJsonDb();
@@ -1867,6 +1982,7 @@ export const db = {
         customer_tax_flat_ghs: jdb.admin_settings.customer_tax_flat_ghs !== undefined ? Number(jdb.admin_settings.customer_tax_flat_ghs) : 0.00,
         admin_total_withdrawn_ghs: jdb.admin_settings.admin_total_withdrawn_ghs !== undefined ? Number(jdb.admin_settings.admin_total_withdrawn_ghs) : 0.00,
         admin_withdrawal_logs: jdb.admin_settings.admin_withdrawal_logs !== undefined ? String(jdb.admin_settings.admin_withdrawal_logs) : '[]',
+        admin_forfeited_reseller_profit: jdb.admin_settings.admin_forfeited_reseller_profit !== undefined ? Number(jdb.admin_settings.admin_forfeited_reseller_profit) : 0.00,
         site_bg_color: jdb.admin_settings.site_bg_color !== undefined ? String(jdb.admin_settings.site_bg_color) : '',
         site_bg_image: jdb.admin_settings.site_bg_image !== undefined ? String(jdb.admin_settings.site_bg_image) : '',
         online_support_enabled: jdb.admin_settings.online_support_enabled ?? true,
@@ -1874,11 +1990,19 @@ export const db = {
         reviews_popup_enabled: jdb.admin_settings.reviews_popup_enabled ?? true,
         reviews_display_duration: jdb.admin_settings.reviews_display_duration !== undefined ? Number(jdb.admin_settings.reviews_display_duration) : 5,
         reviews_interval: jdb.admin_settings.reviews_interval !== undefined ? Number(jdb.admin_settings.reviews_interval) : 20,
+        vtu_balance_threshold: jdb.admin_settings.vtu_balance_threshold !== undefined ? Number(jdb.admin_settings.vtu_balance_threshold) : 10,
       };
     }
+    };
+    const settingsResult = await fetchFresh();
+    (global as any).cachedAdminSettings = settingsResult;
+    (global as any).isCached = true;
+    return settingsResult;
   },
 
   async updateSetting(key: string, value: string): Promise<boolean> {
+    (global as any).cachedAdminSettings = null;
+    (global as any).isCached = false;
     if (isFirestore) return firebaseDb.updateSetting(key, value);
     if (isPg && pool) {
       const check = await pool.query("SELECT id FROM admin_settings WHERE setting_key = $1", [key]);
@@ -1890,7 +2014,11 @@ export const db = {
       return true;
     } else {
       const jdb = loadJsonDb();
-      jdb.admin_settings[key] = value === 'true' ? true : (value === 'false' ? false : (isNaN(Number(value)) ? value : Number(value)));
+      if (value === '') {
+        jdb.admin_settings[key] = '';
+      } else {
+        jdb.admin_settings[key] = value === 'true' ? true : (value === 'false' ? false : (isNaN(Number(value)) ? value : Number(value)));
+      }
       saveJsonDb(jdb);
       return true;
     }
@@ -1943,6 +2071,63 @@ export const db = {
     }
   },
 
+  async resetToProduction(): Promise<void> {
+    if (isFirestore) {
+      await firebaseDb.resetToProduction();
+      return;
+    }
+
+    if (isPg && pool) {
+      try {
+        await pool.query("TRUNCATE TABLE orders CASCADE");
+        await pool.query("TRUNCATE TABLE payments CASCADE");
+        await pool.query("TRUNCATE TABLE withdrawal_requests CASCADE");
+        await pool.query("TRUNCATE TABLE sms_logs CASCADE");
+        await pool.query("TRUNCATE TABLE email_logs CASCADE");
+        await pool.query("TRUNCATE TABLE data_delivery_logs CASCADE");
+        await pool.query("TRUNCATE TABLE ratings_reviews CASCADE");
+        await pool.query("UPDATE reseller_accounts SET balance_ghs = 0, total_earned_ghs = 0, total_customers = 0");
+        await pool.query("UPDATE users SET registration_fee_paid_ghs = 0");
+        await pool.query("UPDATE users SET role = 'admin', status = 'active' WHERE email = 'aaronbinka173@gmail.com'");
+      } catch (err) {
+        console.warn('Postgres truncate/wipe error during reset:', err);
+      }
+    } else {
+      const jdb = loadJsonDb();
+      jdb.orders = [];
+      jdb.payments = [];
+      jdb.withdrawal_requests = [];
+      jdb.sms_logs = [];
+      jdb.email_logs = [];
+      jdb.data_delivery_logs = [];
+      jdb.ratings_reviews = [];
+      jdb.reseller_accounts = (jdb.reseller_accounts || []).map(a => ({
+        ...a,
+        balance_ghs: 0,
+        total_earned_ghs: 0,
+        total_customers: 0
+      }));
+      jdb.users = (jdb.users || []).map(u => ({
+        ...u,
+        registration_fee_paid_ghs: 0,
+        role: u.email.toLowerCase().trim() === 'aaronbinka173@gmail.com' ? 'admin' : u.role,
+        status: u.email.toLowerCase().trim() === 'aaronbinka173@gmail.com' ? 'active' : u.status
+      }));
+      saveJsonDb(jdb);
+    }
+    
+    // Reset VTU Gateway Wallet balance, admin claims, and test mode status
+    try {
+      await this.updateSetting('vtu_provider_balance', '0.00');
+      await this.updateSetting('admin_total_withdrawn_ghs', '0.00');
+      await this.updateSetting('admin_forfeited_reseller_profit', '0.00');
+      await this.updateSetting('admin_withdrawal_logs', '[]');
+      await this.updateSetting('test_mode_enabled', 'false');
+    } catch (err) {
+      console.warn('Error resetting setting parameters:', err);
+    }
+  },
+
   async exportDatabase(): Promise<any> {
     if (isPg && pool) {
       const users = (await pool.query("SELECT * FROM users")).rows;
@@ -1959,7 +2144,11 @@ export const db = {
       const admin_settings: Record<string, any> = {};
       for (const row of admin_settings_rows) {
         const val = row.setting_value;
-        admin_settings[row.setting_key] = val === 'true' ? true : (val === 'false' ? false : (isNaN(Number(val)) ? val : Number(val)));
+        if (val === '') {
+          admin_settings[row.setting_key] = '';
+        } else {
+          admin_settings[row.setting_key] = val === 'true' ? true : (val === 'false' ? false : (isNaN(Number(val)) ? val : Number(val)));
+        }
       }
 
       return {

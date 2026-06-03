@@ -158,6 +158,25 @@ export const firebaseDb = {
     return true;
   },
 
+  async deleteUser(id: number): Promise<boolean> {
+    await deleteDoc(doc(firestoreDb, 'users', String(id)));
+    try {
+      await deleteDoc(doc(firestoreDb, 'reseller_accounts', String(id)));
+    } catch (err) {
+      console.warn('Reseller account cleanup failed:', err);
+    }
+    try {
+      const rpRef = collection(firestoreDb, 'reseller_pricing');
+      const snap = await getDocs(query(rpRef, where('reseller_id', '==', id)));
+      for (const d of snap.docs) {
+        await deleteDoc(doc(firestoreDb, 'reseller_pricing', d.id));
+      }
+    } catch (err) {
+      console.warn('Pricing cleanup skipped or failed during user deletion:', err);
+    }
+    return true;
+  },
+
   async createSmsLog(resellerId: number | null, senderId: string, message: string, status: string): Promise<any> {
     const nextId = await getNextId('sms_logs');
     const newLog = {
@@ -174,6 +193,29 @@ export const firebaseDb = {
 
   async getSmsLogs(): Promise<any[]> {
     const snap = await getDocs(collection(firestoreDb, 'sms_logs'));
+    const list: any[] = [];
+    snap.forEach(d => {
+      list.push(d.data());
+    });
+    return list.sort((a, b) => b.id - a.id);
+  },
+
+  async createEmailLog(resellerId: number | null, subject: string, message: string, status: string): Promise<any> {
+    const nextId = await getNextId('email_logs');
+    const newLog = {
+      id: nextId,
+      reseller_id: resellerId,
+      subject,
+      message,
+      status,
+      created_at: new Date().toISOString()
+    };
+    await setDoc(doc(firestoreDb, 'email_logs', String(nextId)), newLog);
+    return newLog;
+  },
+
+  async getEmailLogs(): Promise<any[]> {
+    const snap = await getDocs(collection(firestoreDb, 'email_logs'));
     const list: any[] = [];
     snap.forEach(d => {
       list.push(d.data());
@@ -568,7 +610,11 @@ export const firebaseDb = {
       const data = d.data();
       if (data.setting_key) {
         const val = data.setting_value;
-        settings[data.setting_key] = val === 'true' ? true : (val === 'false' ? false : (isNaN(Number(val)) ? val : Number(val)));
+        if (val === '') {
+          settings[data.setting_key] = '';
+        } else {
+          settings[data.setting_key] = val === 'true' ? true : (val === 'false' ? false : (isNaN(Number(val)) ? val : Number(val)));
+        }
       }
     });
     return settings;
@@ -606,5 +652,76 @@ export const firebaseDb = {
     };
     await setDoc(doc(firestoreDb, 'ratings_reviews', String(nextId)), newDoc);
     return newDoc;
+  },
+
+  async resetToProduction(): Promise<void> {
+    const collectionsToClear = [
+      'orders',
+      'payments',
+      'withdrawal_requests',
+      'sms_logs',
+      'email_logs',
+      'data_delivery_logs',
+      'ratings_reviews'
+    ];
+
+    for (const c of collectionsToClear) {
+      try {
+        const snap = await getDocs(collection(firestoreDb, c));
+        for (const d of snap.docs) {
+          await deleteDoc(doc(firestoreDb, c, d.id));
+        }
+      } catch (err) {
+        console.warn(`Error clearing Firestore collection ${c}:`, err);
+      }
+    }
+
+    // Zero out all existing reseller accounts' balances and statistics
+    try {
+      const snap = await getDocs(collection(firestoreDb, 'reseller_accounts'));
+      for (const d of snap.docs) {
+        await updateDoc(doc(firestoreDb, 'reseller_accounts', d.id), {
+          balance_ghs: 0,
+          total_earned_ghs: 0,
+          total_customers: 0
+        });
+      }
+    } catch (err) {
+      console.warn('Error resetting reseller_accounts balances:', err);
+    }
+
+    // Preserve all registered user accounts, but reset their registration fee paid record to 0
+    // so previous simulated fees do not skew live administrative earnings calculation.
+    try {
+      const usersSnap = await getDocs(collection(firestoreDb, 'users'));
+      for (const d of usersSnap.docs) {
+        const userData = d.data();
+        const email = (userData.email || '').toLowerCase().trim();
+        if (email === 'aaronbinka173@gmail.com') {
+          await updateDoc(doc(firestoreDb, 'users', d.id), {
+            role: 'admin',
+            status: 'active',
+            registration_fee_paid_ghs: 0
+          });
+        } else {
+          await updateDoc(doc(firestoreDb, 'users', d.id), {
+            registration_fee_paid_ghs: 0
+          });
+        }
+      }
+    } catch (err) {
+      console.warn('Error resetting user registration fee metrics:', err);
+    }
+
+    // Reset VTU Gateway Wallet balance, admin claims, and test mode status
+    try {
+      await this.updateSetting('vtu_provider_balance', '0.00');
+      await this.updateSetting('admin_total_withdrawn_ghs', '0.00');
+      await this.updateSetting('admin_forfeited_reseller_profit', '0.00');
+      await this.updateSetting('admin_withdrawal_logs', '[]');
+      await this.updateSetting('test_mode_enabled', 'false');
+    } catch (err) {
+      console.warn('Error resetting setting parameters:', err);
+    }
   }
 };

@@ -11,6 +11,7 @@ dotenv.config();
 
 import { initDb, db } from './server/db';
 import { deliverDataBundle, finalizePaidOrder } from './server/payment-delivery';
+import { sendRealSms, sendRealEmail } from './server/notification';
 
 const app = express();
 const PORT = 3000;
@@ -36,8 +37,19 @@ function getGeminiClient() {
   return aiClient;
 }
 
+const isVideoMedia = (src: string): boolean => {
+  if (!src) return false;
+  const lowercase = src.toLowerCase();
+  return src.startsWith('data:video/') || 
+         lowercase.endsWith('.mp4') || 
+         lowercase.endsWith('.webm') || 
+         lowercase.endsWith('.ogg') ||
+         lowercase.includes('video');
+};
+
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
 // Helper auth middleware
 export interface AuthRequest extends Request {
@@ -431,7 +443,7 @@ app.get('/api/registration-fee', async (req: Request, res: Response) => {
       global_text_color_muted: settings.global_text_color_muted || '',
       global_text_color_accent: settings.global_text_color_accent || '',
       site_bg_color: settings.site_bg_color || '',
-      site_bg_image: settings.site_bg_image || '',
+      site_bg_image: settings.site_bg_image ? `/api/settings/bg-image?h=${settings.site_bg_image.length}${isVideoMedia(settings.site_bg_image) ? '&type=video' : ''}` : '',
       whatsapp_community_link: settings.whatsapp_community_link || '',
       whatsapp_channel_link: settings.whatsapp_channel_link || '',
       online_support_enabled: settings.online_support_enabled !== false,
@@ -447,6 +459,40 @@ app.get('/api/registration-fee', async (req: Request, res: Response) => {
     });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
+  }
+});
+
+// Stream background image or video separately to prevent freezing during settings load
+app.get('/api/settings/bg-image', async (req: Request, res: Response) => {
+  try {
+    const settings = await db.getSettings();
+    const bg = settings.site_bg_image;
+    if (!bg) {
+      return res.status(404).send('No background asset configured');
+    }
+
+    if (bg.startsWith('data:')) {
+      const match = bg.match(/^data:([^;]+);base64,(.+)$/);
+      if (match) {
+        const contentType = match[1];
+        const base64Data = match[2];
+        const buffer = Buffer.from(base64Data, 'base64');
+        
+        // Cache the response for 1 year (31536000 seconds) in the browser
+        res.set({
+          'Content-Type': contentType,
+          'Content-Length': buffer.length,
+          'Cache-Control': 'public, max-age=31536000, immutable'
+        });
+        return res.send(buffer);
+      }
+    } else if (bg.startsWith('http')) {
+      return res.redirect(bg);
+    }
+
+    return res.status(404).send('Invalid background configuration');
+  } catch (err: any) {
+    return res.status(500).send(err.message);
   }
 });
 
@@ -505,7 +551,7 @@ app.get('/api/store/:slug', async (req: Request, res: Response) => {
       bundles: storefrontBundles,
       reviews: storefrontReviews,
       site_bg_color: settings.site_bg_color || '',
-      site_bg_image: settings.site_bg_image || '',
+      site_bg_image: settings.site_bg_image ? `/api/settings/bg-image?h=${settings.site_bg_image.length}${isVideoMedia(settings.site_bg_image) ? '&type=video' : ''}` : '',
       whatsapp_community_link: settings.whatsapp_community_link || '',
       whatsapp_channel_link: settings.whatsapp_channel_link || '',
       online_support_enabled: settings.online_support_enabled !== false,
@@ -829,14 +875,16 @@ app.get('/api/admin/dashboard', verifyToken(['admin']), async (req: AuthRequest,
       }
     });
 
+    const forfeitedProfit = settings.admin_forfeited_reseller_profit !== undefined ? Number(settings.admin_forfeited_reseller_profit) : 0;
     const vtuBalance = settings.vtu_provider_balance !== undefined ? Number(settings.vtu_provider_balance) : 124.50;
 
     const analytics = {
       total_resellers: resellers.length,
       total_customers: customers.length,
       total_orders: orders.length,
-      total_revenue_ghs: totalOrderRevenue + paidRegistrations,
-      total_admin_fees_earned_ghs: totalAdminFees,
+      total_revenue_ghs: totalOrderRevenue + paidRegistrations + forfeitedProfit,
+      total_admin_fees_earned_ghs: totalAdminFees + forfeitedProfit,
+      total_forfeited_reseller_profit_ghs: forfeitedProfit,
       total_registrations_earned_ghs: paidRegistrations,
       pending_withdrawals: withdrawals.filter(w => w.status === 'pending').length,
       withdrawal_payouts_ghs: withdrawals.filter(w => w.status === 'approved').reduce((sum, w) => sum + Number(w.amount_ghs), 0),
@@ -1073,6 +1121,43 @@ app.put('/api/admin/resellers/:id/toggle-admin', verifyToken(['admin']), async (
 });
 
 
+// Admin delete reseller account completely
+app.delete('/api/admin/resellers/:id', verifyToken(['admin']), async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = Number(req.params.id);
+    const user = await db.getUserById(userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User account not found.' });
+    }
+
+    if (user.email.toLowerCase() === 'aaronbinka173@gmail.com') {
+      return res.status(400).json({ error: 'The platform owner account cannot be deleted.' });
+    }
+
+    // Capture the reseller's outstanding balance, and transfer it to the admin forfeited balance setting
+    const acc = await db.getResellerAccountByUserId(userId);
+    const balance = acc ? Number(acc.balance_ghs || 0) : 0;
+
+    let confiscatedMessage = "";
+    if (balance > 0) {
+      const settings = await db.getSettings();
+      const currentForfeited = settings.admin_forfeited_reseller_profit !== undefined ? Number(settings.admin_forfeited_reseller_profit) : 0;
+      const newForfeitedTotal = Number((currentForfeited + balance).toFixed(2));
+      await db.updateSetting('admin_forfeited_reseller_profit', String(newForfeitedTotal));
+      confiscatedMessage = ` Their outstanding balance of ₵${balance.toFixed(2)} GHS has been confiscated and credited to your Administrative Momo profit claims balance successfully!`;
+    }
+
+    await db.deleteUser(userId);
+    return res.json({
+      success: true,
+      message: `The reseller account for "${user.email}" has been permanently purged.${confiscatedMessage}`
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+
 // Admin reset reseller password
 app.post('/api/admin/resellers/:id/reset-password', verifyToken(['admin']), async (req: AuthRequest, res: Response) => {
   try {
@@ -1143,18 +1228,16 @@ app.post('/api/admin/send-sms', verifyToken(['admin']), async (req: AuthRequest,
     const sentReceipts: any[] = [];
     for (const r of targetResellers) {
       const recipientPhone = r.phone || 'N/A';
-      console.log(`[Outbound SMS - Telephony Gateway]`);
-      console.log(`  Sender: Alphanumeric Alpha-Tag Mask "${senderId}" (TECHNICAL NO-REPLY ENFORCED)`);
-      console.log(`  Recipient Phone: +233 ${recipientPhone}`);
-      console.log(`  Message Payload: "${message}"`);
-      console.log(`  Gateway Status: Routed via SS7/SMPP Provider (One-Way Alphanumeric Gateway successfully established)`);
+      
+      // Dispatch real live SMS
+      const smsSent = await sendRealSms(recipientPhone, message, senderId);
 
       // Log to database
       const log = await db.createSmsLog(
         r.user_id,
         senderId,
         message,
-        'Delivered'
+        smsSent ? 'Delivered' : 'Simulated'
       );
       sentReceipts.push({ ...log, recipientEmail: r.email, recipientPhone });
     }
@@ -1200,24 +1283,25 @@ app.post('/api/admin/send-email', verifyToken(['admin']), async (req: AuthReques
       return res.status(400).json({ error: 'No active partners/resellers registered to receive emails.' });
     }
 
+    const sentReceipts: any[] = [];
     for (const r of targetResellers) {
       const recipientEmail = r.email || 'customer@example.com';
-      const storeName = r.store_name || r.email.split('@')[0];
-
-      console.log(`\n================== OUTBOUND ADMIN EMAIL DISPATCH TO RESELLER ==================`);
-      console.log(`[Sender]: Aaron Binka <aaronbinka173@gmail.com>`);
-      console.log(`[Recipient Email]: ${recipientEmail}`);
-      console.log(`[Store Name]: ${storeName}`);
-      console.log(`[Subject Line]: ${subject}`);
-      console.log(`[Body Payload]: ${message}`);
-      console.log(`[SMTP Node Status]: Active, TLS Handshake success, Dispatched via verified SMTP relay node (Status: Sent)`);
-      console.log(`==================================================================================\n`);
+      const emailSent = await sendRealEmail(recipientEmail, subject, message);
+      
+      const log = await db.createEmailLog(
+        r.user_id,
+        subject,
+        message,
+        emailSent ? 'Delivered' : 'Simulated'
+      );
+      sentReceipts.push({ ...log, recipientEmail, store_name: r.store_name });
     }
 
     return res.json({
       success: true,
-      messagePrefix: `Admin Outbound Email Broadcast successfully dispatched to ${targetResellers.length} reseller partner(s).`,
-      dispatchCount: targetResellers.length
+      messagePrefix: `Admin Outbound Email Broadcast successfully processed for ${targetResellers.length} partner(s). Check delivery states below (either Direct SMTP or Active Sandbox Simulation)!`,
+      dispatchCount: targetResellers.length,
+      logs: sentReceipts
     });
   } catch (err: any) {
     console.error('Send Reseller Email Error:', err);
@@ -1229,6 +1313,16 @@ app.post('/api/admin/send-email', verifyToken(['admin']), async (req: AuthReques
 app.get('/api/admin/sms-logs', verifyToken(['admin']), async (req: AuthRequest, res: Response) => {
   try {
     const logs = await db.getSmsLogs();
+    return res.json(logs);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Admin list outbound Email logs
+app.get('/api/admin/email-logs', verifyToken(['admin']), async (req: AuthRequest, res: Response) => {
+  try {
+    const logs = await db.getEmailLogs();
     return res.json(logs);
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
@@ -1344,7 +1438,8 @@ app.post('/api/admin/withdraw', verifyToken(['admin']), async (req: AuthRequest,
     const totalAdminFees = paidOrders.reduce((sum, o) => sum + Number(o.admin_fee_ghs || 0), 0);
     const paidRegistrations = resellers.reduce((sum, u) => sum + Number(u.registration_fee_paid_ghs || 0), 0);
 
-    const grossProfit = totalAdminFees + paidRegistrations;
+    const forfeitedProfit = settings.admin_forfeited_reseller_profit !== undefined ? Number(settings.admin_forfeited_reseller_profit) : 0;
+    const grossProfit = totalAdminFees + paidRegistrations + forfeitedProfit;
     const currentWithdrawn = Number(settings.admin_total_withdrawn_ghs || 0);
     const availableBalance = Number((grossProfit - currentWithdrawn).toFixed(2));
 
@@ -1462,6 +1557,41 @@ app.put('/api/admin/settings/test-mode', verifyToken(['admin']), async (req: Aut
   }
 });
 
+app.post('/api/admin/settings/preload-sandbox', verifyToken(['admin']), async (req: AuthRequest, res: Response) => {
+  try {
+    await db.updateSetting('payment_gateway', 'paystack');
+    await db.updateSetting('paystack_public_key', 'pk_test_mac_data_hub_demo_sandbox_888');
+    await db.updateSetting('paystack_secret_key', 'sk_test_mac_data_hub_demo_sandbox_888');
+    await db.updateSetting('flutterwave_public_key', 'FLWPUBK_test_mac_data_hub_demo_sandbox_888');
+    await db.updateSetting('flutterwave_secret_key', 'FLWSECK_test_mac_data_hub_demo_sandbox_888');
+    await db.updateSetting('data_api_username', 'mac_data_hub_vtu25');
+    await db.updateSetting('data_api_key', 'mock_api_key_sandbox_demo');
+    await db.updateSetting('data_api_url', 'https://subandgain.com/api/data.php');
+    await db.updateSetting('test_mode_enabled', 'true');
+    await db.updateSetting('online_support_restrictions', 'You are the virtual customer support AI for Mac Data Hub in Ghana. Help visitors choose appropriate high-speed MTN or Telecel or AT data bundles at highly subsidized reseller prices. Instruct customers to checkout with Mobile Money (Momo) instantly.');
+    return res.json({ success: true, message: 'All sandbox mock credentials and active simulator parameters loaded successfully!' });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/admin/settings/reset-database', verifyToken(['admin']), async (req: AuthRequest, res: Response) => {
+  try {
+    const callerEmail = req.user?.email?.toLowerCase();
+    if (callerEmail !== 'aaronbinka173@gmail.com') {
+      return res.status(403).json({ error: 'Only the platform owner Aaron Binka can trigger a complete production level database wipe.' });
+    }
+
+    await db.resetToProduction();
+    return res.json({ 
+      success: true, 
+      message: 'Database successfully purged and reset to active production mode! All demo values, mock purchases, sandbox logs, and test reseller balances have been erased. Test mode is now deactivated.' 
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 app.put('/api/admin/settings/gateway', verifyToken(['admin']), async (req: AuthRequest, res: Response) => {
   try {
     const { payment_gateway, paystack_public_key, paystack_secret_key, flutterwave_public_key, flutterwave_secret_key } = req.body;
@@ -1478,11 +1608,44 @@ app.put('/api/admin/settings/gateway', verifyToken(['admin']), async (req: AuthR
 
 app.put('/api/admin/settings/data-api', verifyToken(['admin']), async (req: AuthRequest, res: Response) => {
   try {
-    const { data_api_username, data_api_key, data_api_url } = req.body;
+    const { data_api_username, data_api_key, data_api_url, vtu_balance_threshold } = req.body;
     if (data_api_username !== undefined) await db.updateSetting('data_api_username', String(data_api_username));
     if (data_api_key !== undefined) await db.updateSetting('data_api_key', String(data_api_key));
     if (data_api_url !== undefined) await db.updateSetting('data_api_url', String(data_api_url));
+    if (vtu_balance_threshold !== undefined) await db.updateSetting('vtu_balance_threshold', String(vtu_balance_threshold));
     return res.json({ success: true, message: 'SubAndGain data bundle dispatcher API settings updated successfully.' });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/admin/settings/notifications', verifyToken(['admin']), async (req: AuthRequest, res: Response) => {
+  try {
+    const { 
+      mnotify_api_key, 
+      arkesel_api_key, 
+      sms_sender_id, 
+      smtp_host, 
+      smtp_port, 
+      smtp_user, 
+      smtp_pass, 
+      smtp_from, 
+      smtp_from_name,
+      smtp_secure
+    } = req.body;
+
+    if (mnotify_api_key !== undefined) await db.updateSetting('mnotify_api_key', String(mnotify_api_key));
+    if (arkesel_api_key !== undefined) await db.updateSetting('arkesel_api_key', String(arkesel_api_key));
+    if (sms_sender_id !== undefined) await db.updateSetting('sms_sender_id', String(sms_sender_id));
+    if (smtp_host !== undefined) await db.updateSetting('smtp_host', String(smtp_host));
+    if (smtp_port !== undefined) await db.updateSetting('smtp_port', String(smtp_port));
+    if (smtp_user !== undefined) await db.updateSetting('smtp_user', String(smtp_user));
+    if (smtp_pass !== undefined) await db.updateSetting('smtp_pass', String(smtp_pass));
+    if (smtp_from !== undefined) await db.updateSetting('smtp_from', String(smtp_from));
+    if (smtp_from_name !== undefined) await db.updateSetting('smtp_from_name', String(smtp_from_name));
+    if (smtp_secure !== undefined) await db.updateSetting('smtp_secure', String(smtp_secure));
+
+    return res.json({ success: true, message: 'All notification (Email/SMS) API credentials and Sender IDs configured successfully.' });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }

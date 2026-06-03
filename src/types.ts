@@ -147,4 +147,5 @@ export interface AdminSettings {
   reviews_popup_enabled?: boolean;
   reviews_display_duration?: number;
   reviews_interval?: number;
+  vtu_balance_threshold?: number;
 }

@@ -14,10 +14,29 @@ import CheckoutModal from './components/CheckoutModal';
 import DashboardAdmin from './components/DashboardAdmin';
 import DashboardReseller from './components/DashboardReseller';
 
+const isVideoMedia = (src: string) => {
+  if (!src) return false;
+  const lowercase = src.toLowerCase();
+  return src.startsWith('data:video/') || 
+         lowercase.endsWith('.mp4') || 
+         lowercase.endsWith('.webm') || 
+         lowercase.endsWith('.ogg') ||
+         lowercase.includes('video') ||
+         lowercase.includes('type=video');
+};
+
 export default function App() {
   // Navigation states
   const [view, setView] = useState<'home' | 'store' | 'dashboard' | 'auth' | 'my_purchases'>('home');
   const [storeSlug, setStoreSlug] = useState<string | null>(null);
+  const [authWindowMode, setAuthWindowMode] = useState<'login' | 'register'>('login');
+  const [authWindowRole, setAuthWindowRole] = useState<'customer' | 'reseller'>('reseller');
+
+  const triggerAuth = (mode: 'login' | 'register' = 'login', role: 'customer' | 'reseller' = 'reseller') => {
+    setAuthWindowMode(mode);
+    setAuthWindowRole(role);
+    setView('auth');
+  };
   
   // Session details
   const [token, setToken] = useState<string | null>(localStorage.getItem('mac_hub_token'));
@@ -137,7 +156,16 @@ export default function App() {
 
   const fetchGlobalSettings = () => {
     fetch('/api/registration-fee')
-      .then(res => res.json())
+      .then(res => {
+        if (!res.ok) {
+          throw new Error(`HTTP error! status: ${res.status}`);
+        }
+        const contentType = res.headers.get('content-type');
+        if (!contentType || !contentType.includes('application/json')) {
+          throw new TypeError("Did not receive JSON payload from registration-fee endpoint!");
+        }
+        return res.json();
+      })
       .then(data => {
         if (data.site_name) setSiteName(data.site_name);
         if (data.site_color) setSiteColor(data.site_color);
@@ -148,7 +176,10 @@ export default function App() {
         if (data.global_text_color_muted !== undefined) setTextColorMuted(data.global_text_color_muted);
         if (data.global_text_color_accent !== undefined) setTextColorAccent(data.global_text_color_accent);
         if (data.site_bg_color !== undefined) setSiteBgColor(data.site_bg_color);
-        if (data.site_bg_image !== undefined) setSiteBgImage(data.site_bg_image);
+        if (data.site_bg_image !== undefined) {
+          const imgVal = String(data.site_bg_image);
+          setSiteBgImage(imgVal === '0' || imgVal === 'null' || imgVal === 'undefined' ? '' : imgVal);
+        }
         if (data.online_support_enabled !== undefined) setSupportEnabled(data.online_support_enabled !== false);
         if (data.online_support_restrictions !== undefined) setSupportRestrictions(data.online_support_restrictions);
         if (data.whatsapp_community_link !== undefined) setWhatsappCommunityLink(data.whatsapp_community_link);
@@ -176,11 +207,16 @@ export default function App() {
       html, body {
         font-family: "${siteFontFamily || 'Outfit'}", ui-sans-serif, system-ui, sans-serif !important;
         font-size: ${siteFontSize || '16px'} !important;
+        overflow-x: hidden !important;
+        max-width: 100vw !important;
       }
       
       body {
-        ${siteBgColor ? `background-color: ${siteBgColor} !important; background-image: none !important;` : ''}
-        ${siteBgImage ? `background-image: url("${siteBgImage}") !important; background-size: cover !important; background-position: center !important; background-attachment: fixed !important; background-repeat: no-repeat !important;` : ''}
+        background-color: ${siteBgColor || '#020617'} !important;
+        ${siteBgImage && !isVideoMedia(siteBgImage)
+          ? `background-image: url("${siteBgImage}") !important; background-size: cover !important; background-position: center !important; background-attachment: fixed !important; background-repeat: no-repeat !important;` 
+          : 'background-image: none !important;'
+        }
       }
       
       :root, .light {
@@ -232,7 +268,21 @@ export default function App() {
         fetchStorefront(slug);
       }
     } else {
-      setView('home');
+      // Check for query parameter or hash for auto registration view:
+      const searchParams = new URLSearchParams(window.location.search);
+      const hash = window.location.hash;
+      if (
+        searchParams.get('register') === 'true' || 
+        searchParams.get('auth') === 'register' || 
+        hash === '#register' || 
+        hash === '#become-partner'
+      ) {
+        setAuthWindowMode('register');
+        setAuthWindowRole('reseller');
+        setView('auth');
+      } else {
+        setView('home');
+      }
       fetchGeneralBundles();
     }
 
@@ -390,7 +440,10 @@ export default function App() {
         setStorefrontBundles(d.bundles);
         setStorefrontReviews(d.reviews || []);
         if (d.site_bg_color !== undefined) setSiteBgColor(d.site_bg_color);
-        if (d.site_bg_image !== undefined) setSiteBgImage(d.site_bg_image);
+        if (d.site_bg_image !== undefined) {
+          const imgVal = String(d.site_bg_image);
+          setSiteBgImage(imgVal === '0' || imgVal === 'null' || imgVal === 'undefined' ? '' : imgVal);
+        }
         if (d.online_support_enabled !== undefined) setSupportEnabled(d.online_support_enabled !== false);
         if (d.online_support_restrictions !== undefined) setSupportRestrictions(d.online_support_restrictions);
         if (d.whatsapp_community_link !== undefined) setWhatsappCommunityLink(d.whatsapp_community_link);
@@ -462,6 +515,8 @@ export default function App() {
     localStorage.removeItem('mac_hub_user');
     setToken(null);
     setUser(null);
+    window.history.pushState({}, '', '/');
+    setStoreSlug(null);
     setView('home');
   };
 
@@ -542,11 +597,32 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-amber-500 selection:text-slate-950">
+    <div 
+      className={`min-h-screen text-slate-100 flex flex-col font-sans selection:bg-amber-500 selection:text-slate-950 transition-all duration-300 ${
+        siteBgImage ? 'bg-transparent' : 'bg-slate-950'
+      }`}
+    >
       <style>{typographyCss}</style>
+
+      {siteBgImage && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-xs -z-10 pointer-events-none" />
+      )}
+
+      {siteBgImage && isVideoMedia(siteBgImage) && (
+        <video
+          src={siteBgImage}
+          autoPlay
+          loop
+          muted
+          playsInline
+          className="fixed inset-0 w-full h-full object-cover -z-20 pointer-events-none"
+        />
+      )}
       
       {/* HEADER SECTION LAYOUT */}
-      <header className="bg-slate-900 border-b border-slate-800/80 sticky top-0 z-40">
+      <header className={`border-b border-slate-800/80 sticky top-0 z-40 transition-colors duration-300 ${
+        siteBgImage ? 'bg-slate-900/85 backdrop-blur-md' : 'bg-slate-900'
+      }`}>
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex items-center justify-between gap-4">
            {/* Logo element */}
           <a 
@@ -562,16 +638,16 @@ export default function App() {
                 fetchGeneralBundles(); 
               }
             }}
-            className="flex items-center gap-2 group shrink-0"
+            className="flex items-center gap-2 group shrink-0 min-w-0"
           >
-            <div className="w-10 h-10 rounded-xl bg-amber-500 flex items-center justify-center font-black text-slate-950 tracking-wider shadow-lg shadow-amber-500/15 group-hover:scale-105 transition-all text-xs">
+            <div className="w-10 h-10 rounded-xl bg-amber-500 flex items-center justify-center font-black text-slate-950 tracking-wider shadow-lg shadow-amber-500/15 group-hover:scale-105 transition-all text-xs shrink-0 select-none">
               {((view === 'store' && selectedResellerStore) ? selectedResellerStore.store_name : siteName).trim().split(/\s+/).map(w => w[0]).join('').substring(0, 3).toUpperCase() || 'HB'}
             </div>
-            <div>
-              <span className="font-sans font-black tracking-tight text-slate-100 block group-hover:text-amber-400 transition">
+            <div className="min-w-0 leading-tight">
+              <span className="font-sans font-black tracking-tight text-slate-100 block group-hover:text-amber-400 transition truncate max-w-[130px] xs:max-w-[170px] sm:max-w-[240px] md:max-w-none text-xs sm:text-base">
                 {(view === 'store' && selectedResellerStore) ? selectedResellerStore.store_name : siteName}
               </span>
-              <span className="text-xxs text-amber-500 font-mono tracking-wide block uppercase">
+              <span className="text-xxs text-amber-500 font-mono tracking-wide block uppercase truncate max-w-[130px] xs:max-w-[170px] sm:max-w-[240px] md:max-w-none">
                 {(view === 'store' && selectedResellerStore) ? 'Data Storefront' : 'Reseller Gate Ghana'}
               </span>
             </div>
@@ -596,7 +672,7 @@ export default function App() {
               Browse Bundles
             </a>
             {view !== 'store' && (
-              <a href="#become-partner" onClick={() => setView('auth')} className="hover:text-amber-400 transition font-medium">Store Reseller Program</a>
+              <a href="#become-partner" onClick={() => triggerAuth('register', 'reseller')} className="hover:text-amber-400 transition font-medium">Store Reseller Program</a>
             )}
             <button onClick={() => setView('my_purchases')} className="hover:text-amber-400 transition font-medium">Verify My Orders</button>
           </nav>
@@ -648,16 +724,17 @@ export default function App() {
                 </div>
                 <button 
                   onClick={handleLogout}
-                  className="text-slate-400 hover:text-rose-400 p-1 rounded-lg hover:bg-slate-800/60 transition"
-                  title="Disconnect session"
+                  className="text-slate-400 hover:text-rose-400 p-2.5 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-xl hover:bg-slate-800/60 transition shadow-sm"
+                  title="Log out / Disconnect session"
+                  aria-label="Logout"
                 >
-                  <LogOut className="w-4 h-4" />
+                  <LogOut className="w-5 h-5 shrink-0" />
                 </button>
               </div>
             ) : (
               view !== 'store' && (
                 <button
-                  onClick={() => setView('auth')}
+                  onClick={() => triggerAuth('login')}
                   className="flex items-center gap-1 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-bold uppercase px-4 py-2.5 rounded-xl transition shadow font-sans"
                 >
                   <Key className="w-4 h-4 text-amber-400" />
@@ -699,7 +776,7 @@ export default function App() {
                       Instant Purchase Data
                     </a>
                     <button
-                      onClick={() => setView('auth')}
+                      onClick={() => triggerAuth('register', 'reseller')}
                       className="px-6 py-3 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-sans text-sm font-bold uppercase rounded-xl transition text-center"
                     >
                       Launch Your Own reseller Store
@@ -884,7 +961,7 @@ export default function App() {
                   </p>
                 </div>
                 <button
-                  onClick={() => setView('auth')}
+                  onClick={() => triggerAuth('register', 'reseller')}
                   className="px-6 py-3 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold text-xs uppercase rounded-xl transition shrink-0"
                 >
                   Start Your Partner Storefront Free
@@ -1217,6 +1294,7 @@ export default function App() {
               <DashboardAdmin 
                 token={token} 
                 user={user} 
+                onLogout={handleLogout}
                 onTypographyChange={(font, size, colorPrimary, colorBody, colorMuted, colorAccent) => {
                   if (font !== undefined) setSiteFontFamily(font);
                   if (size !== undefined) setSiteFontSize(size);
@@ -1225,9 +1303,18 @@ export default function App() {
                   if (colorMuted !== undefined) setTextColorMuted(colorMuted);
                   if (colorAccent !== undefined) setTextColorAccent(colorAccent);
                 }} 
+                onBrandingChange={(siteName, siteColor, siteBgColor, siteBgImage) => {
+                  if (siteName !== undefined) setSiteName(siteName);
+                  if (siteColor !== undefined) setSiteColor(siteColor);
+                  if (siteBgColor !== undefined) setSiteBgColor(siteBgColor);
+                  if (siteBgImage !== undefined) {
+                    const imgVal = String(siteBgImage);
+                    setSiteBgImage(imgVal === '0' || imgVal === 'null' || imgVal === 'undefined' ? '' : imgVal);
+                  }
+                }}
               />
             ) : user.status === 'active' ? (
-              <DashboardReseller token={token} user={user} />
+              <DashboardReseller token={token} user={user} onLogout={handleLogout} />
             ) : (
               // Beautiful Custom Setup Tracker View for Non-Active Resellers
               <div className="max-w-2xl mx-auto bg-slate-900 border border-slate-800 rounded-2xl p-6 md:p-10 space-y-8 shadow-2xl relative overflow-hidden">
@@ -1325,8 +1412,14 @@ export default function App() {
                 </div>
 
                 <div className="pt-6 border-t border-slate-800/80 flex flex-col sm:flex-row gap-4 justify-between items-center text-center sm:text-left">
-                  <div className="text-xxs text-slate-500 font-mono">
-                    System Email: <span className="text-slate-400">{user.email}</span>
+                  <div className="text-xxs text-slate-500 font-mono text-left space-y-1">
+                    <div>System Email: <span className="text-slate-400">{user.email}</span></div>
+                    <button 
+                      onClick={handleLogout}
+                      className="text-rose-450 hover:text-rose-400 hover:underline transition-colors block text-left uppercase text-xxs font-bold tracking-wider pt-0.5 cursor-pointer"
+                    >
+                      ← Disconnect / Sign Out
+                    </button>
                   </div>
                   <button
                     onClick={async () => {
@@ -1350,12 +1443,14 @@ export default function App() {
 
         {/* VIEW 4: SECURITY AUTH WORKSPACE */}
         {view === 'auth' && (
-          <div className="py-16">
+          <div className="py-16 px-4">
             <AuthWindow 
               onAuthSuccess={handleAuthSuccess} 
               onSetView={setView} 
               onShowPaymentNotification={handleStartRegFeeCheckout}
               disableResellerRegister={!!selectedResellerStore}
+              initialMode={authWindowMode}
+              initialRole={authWindowRole}
             />
           </div>
         )}
@@ -1439,7 +1534,9 @@ export default function App() {
       </main>
 
       {/* FOOTER COMPONENT VIEW */}
-      <footer className="bg-slate-900 border-t border-slate-850 pt-10 pb-6 shrink-0 text-slate-400 text-xs font-sans">
+      <footer className={`border-t border-slate-850 pt-10 pb-6 shrink-0 text-slate-400 text-xs font-sans transition-colors duration-300 ${
+        siteBgImage ? 'bg-slate-900/85 backdrop-blur-md' : 'bg-slate-900'
+      }`}>
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-6">
           <div className="flex flex-col md:flex-row items-center justify-between gap-4">
             <div className="space-y-1 text-center md:text-left">
@@ -1449,7 +1546,7 @@ export default function App() {
             
             <div className="flex flex-wrap gap-4 text-xs font-medium">
               {view !== 'store' && (
-                <a href="#become-partner" onClick={() => setView('auth')} className="hover:text-amber-400 transition">Partner Reseller program</a>
+                <a href="#become-partner" onClick={() => triggerAuth('register', 'reseller')} className="hover:text-amber-400 transition">Partner Reseller program</a>
               )}
               <button onClick={() => setView('my_purchases')} className="hover:text-amber-400 transition">Orders receipts verifying</button>
               <a 
@@ -1482,7 +1579,7 @@ export default function App() {
       <div className="fixed bottom-6 right-6 z-50 flex flex-col items-end gap-3" id="global-right-floating-controls">
         {/* Support Chat Box */}
         {supportEnabled !== false && isSupportOpen && (
-          <div className="w-80 md:w-96 bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl flex flex-col h-[400px] overflow-hidden animate-in fade-in slide-in-from-bottom-4 duration-300">
+          <div className="w-[calc(100vw-3rem)] sm:w-80 md:w-96 bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl flex flex-col h-[400px] overflow-hidden animate-in fade-in slide-in-from-bottom-4 duration-300">
             {/* Header */}
             <div className="bg-slate-850 p-4 border-b border-slate-800 flex items-center justify-between">
               <div className="flex items-center gap-2">
@@ -1578,8 +1675,23 @@ export default function App() {
           </div>
         )}
 
-        {/* Floating Action Column arranged vertically (Top to Down: Customer Care -> WhatsApp Channel -> WhatsApp Community) */}
+        {/* Floating Action Column arranged vertically (Top to Down: Customer Care / Verify Orders -> WhatsApp Channel -> WhatsApp Community) */}
         <div className="flex flex-col items-end gap-2.5">
+          {/* Customer Order Verification Button */}
+          {view !== 'my_purchases' && (
+            <button
+              onClick={() => setView('my_purchases')}
+              className="flex items-center gap-2 bg-slate-900 border border-slate-800 text-amber-500 hover:text-amber-400 font-bold px-4 py-3 h-12 rounded-full shadow-lg hover:scale-105 transition-all outline-none shrink-0 cursor-pointer"
+              title="Verify Past Purchases / Order History"
+              id="global-verify-orders-float-trigger"
+            >
+              <div className="relative flex items-center justify-center">
+                <ShoppingBag className="w-5 h-5 pointer-events-none" />
+              </div>
+              <span className="text-xs uppercase tracking-wider font-sans hidden sm:inline text-slate-200">Verify My Orders</span>
+            </button>
+          )}
+
           {/* Customer Support Desk Button */}
           {supportEnabled !== false && !isSupportOpen && (
             <button

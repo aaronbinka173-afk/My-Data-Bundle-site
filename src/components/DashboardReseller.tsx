@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { 
-  DollarSign, Users, ShoppingCart, Landmark, ArrowUpRight, Copy, Check, Info, Settings2, RefreshCw, AlertCircle, Star
+  DollarSign, Users, ShoppingCart, Landmark, ArrowUpRight, Copy, Check, Info, Settings2, RefreshCw, AlertCircle, Star, LogOut
 } from 'lucide-react';
 import { Bundle, ResellerAccount, WithdrawalRequest, Order } from '../types';
 import CheckoutModal from './CheckoutModal';
@@ -8,9 +8,10 @@ import CheckoutModal from './CheckoutModal';
 interface DashboardResellerProps {
   token: string;
   user: any;
+  onLogout?: () => void;
 }
 
-export default function DashboardReseller({ token, user }: DashboardResellerProps) {
+export default function DashboardReseller({ token, user, onLogout }: DashboardResellerProps) {
   const [activeTab, setActiveTab] = useState<'stats' | 'pricing' | 'customers' | 'orders' | 'withdrawals' | 'reviews'>('stats');
   
   const [loading, setLoading] = useState<boolean>(true);
@@ -212,13 +213,26 @@ export default function DashboardReseller({ token, user }: DashboardResellerProp
           </div>
         </div>
 
-        <button 
-          onClick={fetchResellerData}
-          className="self-start flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 text-slate-300 text-sm hover:bg-slate-700 transition rounded-lg"
-        >
-          <RefreshCw className="w-4 h-4" />
-          Synch Stats
-        </button>
+        <div className="flex items-center gap-2 self-start flex-wrap">
+          <button 
+            onClick={fetchResellerData}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 text-slate-300 text-sm hover:bg-slate-700 transition rounded-lg"
+          >
+            <RefreshCw className="w-4 h-4" />
+            Synch Stats
+          </button>
+          
+          {onLogout && (
+            <button
+              onClick={onLogout}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/25 text-sm transition rounded-lg"
+              title="End active reseller portal session"
+            >
+              <LogOut className="w-4 h-4" />
+              Sign Out / Disconnect
+            </button>
+          )}
+        </div>
       </div>
 
       {notification && (
