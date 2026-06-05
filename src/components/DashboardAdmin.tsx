@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Users, BarChart3, Database, Landmark, Settings, RefreshCw, AlertCircle, CheckCircle2, XCircle, 
-  Trash2, Edit, Plus, Eye, History, Key, MessageSquare, Send, Smartphone, ShoppingCart, RotateCcw, Mail, LogOut
+  Trash2, Edit, Plus, Eye, History, Key, MessageSquare, Send, Smartphone, ShoppingCart, RotateCcw, Mail, LogOut, Copy
 } from 'lucide-react';
 import { Bundle, ResellerAccount, WithdrawalRequest, Order, DataDeliveryLog, AdminSettings } from '../types';
 import CheckoutModal from './CheckoutModal';
@@ -122,6 +122,7 @@ export default function DashboardAdmin({ token, user, onLogout, onTypographyChan
   const [globalSgMargin, setGlobalSgMargin] = useState<string>('2.0');
   const [sgImporting, setSgImporting] = useState<boolean>(false);
   const [preloadingSandbox, setPreloadingSandbox] = useState<boolean>(false);
+  const [copiedInviteLink, setCopiedInviteLink] = useState<boolean>(false);
 
   // Custom Confirmation Dialog State
   const [confirmDialog, setConfirmDialog] = useState<{
@@ -1734,7 +1735,10 @@ export default function DashboardAdmin({ token, user, onLogout, onTypographyChan
                     <div className="text-2xl font-bold font-sans text-slate-200 mt-1">
                       ₵{(Number(stats.total_admin_fees_earned_ghs || 0) + Number(stats.total_registrations_earned_ghs || 0)).toFixed(2)}
                     </div>
-                    <p className="text-[10px] text-slate-500 mt-1">₵{Number(stats.total_admin_fees_earned_ghs || 0).toFixed(2)} royalties + ₵{Number(stats.total_registrations_earned_ghs || 0).toFixed(2)} signups</p>
+                    <p className="text-[10px] text-slate-500 mt-1">
+                      ₵{(Number(stats.total_admin_fees_earned_ghs || 0) - Number(stats.total_forfeited_reseller_profit_ghs || 0)).toFixed(2)} royalties + ₵{Number(stats.total_registrations_earned_ghs || 0).toFixed(2)} signups 
+                      {Number(stats.total_forfeited_reseller_profit_ghs || 0) > 0 && ` + ₵${Number(stats.total_forfeited_reseller_profit_ghs || 0).toFixed(2)} confiscated margins`}
+                    </p>
                   </div>
 
                   <div className="bg-slate-950/30 p-4 rounded-xl border border-slate-850">
@@ -1947,6 +1951,52 @@ export default function DashboardAdmin({ token, user, onLogout, onTypographyChan
                   >
                     <Mail className="w-4 h-4 text-slate-950" />
                     <span>Email Broadcast</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Sub-Agent Invitation & Referral Link Card */}
+              <div className="bg-slate-900 border border-slate-850 rounded-xl p-5 shadow-lg flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div className="space-y-1 max-w-2xl">
+                  <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[10px] font-bold tracking-wider uppercase bg-amber-500/10 text-amber-400">
+                    👑 Admin Onboarding Tool
+                  </span>
+                  <h4 className="text-sm font-semibold text-slate-100">
+                    Sub-Agent (Reseller) Registration Link
+                  </h4>
+                  <p className="text-xs text-slate-400 leading-relaxed">
+                    Copy and send this unique onboarding invitation link to anyone you want to register as a sub-agent. Once they sign up through this link, they can easily create their own storefront under your administrative network.
+                  </p>
+                </div>
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 min-w-full md:min-w-[400px] md:max-w-md">
+                  <div className="flex-1 bg-slate-950 border border-slate-800 rounded-lg py-2 px-3 text-xs text-amber-500 font-mono select-all truncate break-all">
+                    {`${window.location.origin}/?register=true`}
+                  </div>
+                  <button
+                    onClick={() => {
+                      const inviteLink = `${window.location.origin}/?register=true`;
+                      navigator.clipboard.writeText(inviteLink);
+                      setCopiedInviteLink(true);
+                      showNotification("Sub-Agent recruitment invitation link successfully copied to your clipboard!", "success");
+                      setTimeout(() => setCopiedInviteLink(false), 3000);
+                    }}
+                    className={`flex items-center justify-center gap-1.5 py-2 px-4 rounded-lg text-xs font-bold transition-all whitespace-nowrap active:scale-95 shadow ${
+                      copiedInviteLink
+                        ? "bg-emerald-500 text-slate-950"
+                        : "bg-amber-500 hover:bg-amber-600 active:bg-amber-700 text-slate-950"
+                    }`}
+                  >
+                    {copiedInviteLink ? (
+                      <>
+                        <CheckCircle2 className="w-4 h-4" />
+                        <span>Copied!</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-4 h-4" />
+                        <span>Copy Invite Link</span>
+                      </>
+                    )}
                   </button>
                 </div>
               </div>
