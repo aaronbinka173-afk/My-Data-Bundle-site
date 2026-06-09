@@ -2346,7 +2346,7 @@ app.delete('/api/notifications/clear', verifyToken(['admin', 'reseller']), async
 // ==========================================
 
 async function startServer() {
-  if (process.env.VERCEL === '1') {
+  if (process.env.VERCEL || process.env.NOW_REGION || process.env.VERCEL_ENV) {
     // Skip dev server or port listening under Vercel serverless functions
     return;
   }
