@@ -36,6 +36,7 @@ interface JsonDatabase {
   sms_logs?: any[];
   email_logs?: any[];
   ratings_reviews?: any[];
+  notifications?: any[];
 }
 
 let pool: Pool | null = null;
@@ -2071,6 +2072,119 @@ export const db = {
     }
   },
 
+  async getNotifications(userId: number | null): Promise<any[]> {
+    if (isFirestore) return firebaseDb.getNotifications(userId);
+    if (isPg && pool) {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS notifications (
+          id SERIAL PRIMARY KEY,
+          user_id INTEGER,
+          title VARCHAR(255) NOT NULL,
+          message TEXT NOT NULL,
+          type VARCHAR(100) NOT NULL,
+          is_read BOOLEAN DEFAULT false,
+          created_at TIMESTAMP DEFAULT NOW()
+        )
+      `).catch(() => {});
+      let q = "SELECT * FROM notifications";
+      let params: any[] = [];
+      if (userId !== null) {
+        q += " WHERE user_id = $1";
+        params.push(userId);
+      } else {
+        q += " WHERE user_id IS NULL";
+      }
+      q += " ORDER BY id DESC";
+      const res = await pool.query(q, params);
+      return res.rows;
+    } else {
+      const jdb = loadJsonDb();
+      if (!jdb.notifications) jdb.notifications = [];
+      const list = jdb.notifications;
+      if (userId !== null) {
+        return list.filter((n: any) => n.user_id !== null && Number(n.user_id) === Number(userId)).sort((a: any, b: any) => b.id - a.id);
+      }
+      return list.filter((n: any) => n.user_id === null).sort((a: any, b: any) => b.id - a.id);
+    }
+  },
+
+  async createNotification(notification: { user_id: number | null; title: string; message: string; type: string }): Promise<any> {
+    if (isFirestore) return firebaseDb.createNotification(notification);
+    if (isPg && pool) {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS notifications (
+          id SERIAL PRIMARY KEY,
+          user_id INTEGER,
+          title VARCHAR(255) NOT NULL,
+          message TEXT NOT NULL,
+          type VARCHAR(100) NOT NULL,
+          is_read BOOLEAN DEFAULT false,
+          created_at TIMESTAMP DEFAULT NOW()
+        )
+      `).catch(() => {});
+      const res = await pool.query(
+        "INSERT INTO notifications (user_id, title, message, type) VALUES ($1, $2, $3, $4) RETURNING *",
+        [notification.user_id !== null ? Number(notification.user_id) : null, notification.title, notification.message, notification.type]
+      );
+      return res.rows[0];
+    } else {
+      const jdb = loadJsonDb();
+      if (!jdb.notifications) jdb.notifications = [];
+      const newId = jdb.notifications.length > 0 ? Math.max(...jdb.notifications.map((n: any) => n.id)) + 1 : 1;
+      const newNotif = {
+        id: newId,
+        user_id: notification.user_id !== null ? Number(notification.user_id) : null,
+        title: notification.title,
+        message: notification.message,
+        type: notification.type,
+        is_read: false,
+        created_at: new Date().toISOString()
+      };
+      jdb.notifications.push(newNotif);
+      saveJsonDb(jdb);
+      return newNotif;
+    }
+  },
+
+  async markNotificationAsRead(id: number): Promise<boolean> {
+    if (isFirestore) return firebaseDb.markNotificationAsRead(id);
+    if (isPg && pool) {
+      await pool.query("UPDATE notifications SET is_read = true WHERE id = $1", [id]);
+      return true;
+    } else {
+      const jdb = loadJsonDb();
+      if (!jdb.notifications) jdb.notifications = [];
+      const notif = jdb.notifications.find((n: any) => n.id === id);
+      if (notif) {
+        notif.is_read = true;
+        saveJsonDb(jdb);
+      }
+      return true;
+    }
+  },
+
+  async clearNotifications(userId: number | null): Promise<boolean> {
+    if (isFirestore) return firebaseDb.clearNotifications(userId);
+    if (isPg && pool) {
+      if (userId !== null) {
+        await pool.query("DELETE FROM notifications WHERE user_id = $1", [userId]);
+      } else {
+        await pool.query("DELETE FROM notifications WHERE user_id IS NULL");
+      }
+      return true;
+    } else {
+      const jdb = loadJsonDb();
+      if (!jdb.notifications) jdb.notifications = [];
+      if (userId !== null) {
+        jdb.notifications = jdb.notifications.filter((n: any) => n.user_id === null || Number(n.user_id) !== Number(userId));
+      } else {
+        jdb.notifications = jdb.notifications.filter((n: any) => n.user_id !== null);
+      }
+      saveJsonDb(jdb);
+      return true;
+    }
+  },
+
   async resetToProduction(): Promise<void> {
     if (isFirestore) {
       await firebaseDb.resetToProduction();
@@ -2086,6 +2200,7 @@ export const db = {
         await pool.query("TRUNCATE TABLE email_logs CASCADE");
         await pool.query("TRUNCATE TABLE data_delivery_logs CASCADE");
         await pool.query("TRUNCATE TABLE ratings_reviews CASCADE");
+        await pool.query("TRUNCATE TABLE notifications CASCADE").catch(() => {});
         await pool.query("UPDATE reseller_accounts SET balance_ghs = 0, total_earned_ghs = 0, total_customers = 0");
         await pool.query("UPDATE users SET registration_fee_paid_ghs = 0");
         await pool.query("UPDATE users SET role = 'admin', status = 'active' WHERE email = 'aaronbinka173@gmail.com'");
@@ -2101,6 +2216,7 @@ export const db = {
       jdb.email_logs = [];
       jdb.data_delivery_logs = [];
       jdb.ratings_reviews = [];
+      jdb.notifications = [];
       jdb.reseller_accounts = (jdb.reseller_accounts || []).map(a => ({
         ...a,
         balance_ghs: 0,

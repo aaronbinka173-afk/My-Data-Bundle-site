@@ -115,7 +115,12 @@ export default function AuthWindow({
       // Successful normal login
       onAuthSuccess(data.token, data.user);
     } catch (err) {
-      setErrorMessage('Failed to connect to authorization servers.');
+      console.error(err);
+      if (window.location.hostname.endsWith('.vercel.app') || window.location.hostname.includes('vercel')) {
+        setErrorMessage('Failed to connect to Vercel backend. Make sure your FIREBASE_CONFIG or DATABASE_URL environment variables are configured in the Vercel dashboard and your deploy completed.');
+      } else {
+        setErrorMessage('Failed to connect to authorization servers. Please check if your backend is running.');
+      }
     } finally {
       setLoading(false);
     }

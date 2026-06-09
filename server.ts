@@ -1341,10 +1341,46 @@ app.get('/api/admin/withdrawals', verifyToken(['admin']), async (req: AuthReques
 
 app.put('/api/admin/withdrawals/:id/approve', verifyToken(['admin']), async (req: AuthRequest, res: Response) => {
   try {
-    const success = await db.processWithdrawal(Number(req.params.id), 'approved');
+    const wrId = Number(req.params.id);
+    const withdrawals = await db.getWithdrawals();
+    const wr = withdrawals.find((w: any) => w.id === wrId);
+
+    const success = await db.processWithdrawal(wrId, 'approved');
     if (!success) {
       return res.status(400).json({ error: 'Failed to approve withdrawal request (already processed or insufficient balance)' });
     }
+
+    if (wr) {
+      const reseller = await db.getUserById(wr.reseller_id);
+      if (reseller) {
+        // 1. In-app notification
+        await db.createNotification({
+          user_id: reseller.id,
+          title: 'Withdrawal Approved',
+          message: `Your withdrawal request of GHS ${Number(wr.amount_ghs).toFixed(2)} has been successfully approved and cleared.`,
+          type: 'withdrawal_success'
+        }).catch((e: any) => console.log('In-app skip:', e));
+
+        // 2. SMTP Email notification
+        const emailSubject = `Withdrawal Approved - Mac Data Hub`;
+        const emailBody = `
+          Hello ${reseller.store_name || reseller.email},
+
+          We are pleased to notify you that your withdrawal request of GHS ${Number(wr.amount_ghs).toFixed(2)} has been approved and cleared by the platform administrators.
+
+          Withdrawal Details:
+          Amount: GHS ${Number(wr.amount_ghs).toFixed(2)}
+          Status: Approved and Dispatched
+          Date Code: ${new Date().toLocaleString()}
+
+          Thank you for choosing Mac Data Hub!
+          Best regards,
+          Site Administration Support
+        `;
+        await sendRealEmail(reseller.email, emailSubject, emailBody).catch((e: any) => console.log('Mail skip:', e));
+      }
+    }
+
     return res.json({ success: true, message: 'Withdrawal approved and deducted successfully!' });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
@@ -1353,11 +1389,49 @@ app.put('/api/admin/withdrawals/:id/approve', verifyToken(['admin']), async (req
 
 app.put('/api/admin/withdrawals/:id/decline', verifyToken(['admin']), async (req: AuthRequest, res: Response) => {
   try {
+    const wrId = Number(req.params.id);
     const { declineReason } = req.body;
-    const success = await db.processWithdrawal(Number(req.params.id), 'declined', declineReason);
+    const withdrawals = await db.getWithdrawals();
+    const wr = withdrawals.find((w: any) => w.id === wrId);
+
+    const success = await db.processWithdrawal(wrId, 'declined', declineReason);
     if (!success) {
       return res.status(400).json({ error: 'Failed to decline request' });
     }
+
+    if (wr) {
+      const reseller = await db.getUserById(wr.reseller_id);
+      if (reseller) {
+        // 1. In-app notification
+        await db.createNotification({
+          user_id: reseller.id,
+          title: 'Withdrawal Request Declined',
+          message: `Your withdrawal request of GHS ${Number(wr.amount_ghs).toFixed(2)} was declined. Reason specified: ${declineReason || 'No reason provided'}.`,
+          type: 'withdrawal_declined'
+        }).catch((e: any) => console.log('In-app skip:', e));
+
+        // 2. SMTP Email notification
+        const emailSubject = `Withdrawal Declined - Mac Data Hub`;
+        const emailBody = `
+          Hello ${reseller.store_name || reseller.email},
+
+          Your withdrawal request of GHS ${Number(wr.amount_ghs).toFixed(2)} has been declined.
+
+          Withdrawal Details:
+          Amount: GHS ${Number(wr.amount_ghs).toFixed(2)}
+          Status: Declined
+          Reason: ${declineReason || 'No response reason entered'}
+          Date Code: ${new Date().toLocaleString()}
+
+          Please contact the platform support desk or adjust your active balance details if you feel this is in error.
+
+          Best regards,
+          Site Administration Support
+        `;
+        await sendRealEmail(reseller.email, emailSubject, emailBody).catch((e: any) => console.log('Mail skip:', e));
+      }
+    }
+
     return res.json({ success: true, message: 'Withdrawal request declined successfully.' });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
@@ -2148,6 +2222,17 @@ app.post('/api/reseller/withdraw', verifyToken(['reseller']), async (req: AuthRe
     }
 
     const reqRecord = await db.createWithdrawal(resellerId, amt);
+
+    // Alert admin of a new withdrawal request (user_id is null for administrative alerts)
+    const resellerUser = await db.getUserById(resellerId);
+    const resellerLabel = resellerUser ? `${resellerUser.store_name || resellerUser.email} (UID: ${resellerId})` : `Reseller UID #${resellerId}`;
+    await db.createNotification({
+      user_id: null,
+      title: 'New Withdrawal Requested',
+      message: `${resellerLabel} has submitted a new withdrawal request for GHS ${amt.toFixed(2)}.`,
+      type: 'new_withdrawal_request'
+    }).catch((e: any) => console.log('Admin notification skip:', e));
+
     return res.status(201).json({
       success: true,
       data: reqRecord,
@@ -2213,10 +2298,58 @@ app.post('/api/webhook/paystack', async (req: Request, res: Response) => {
 });
 
 // ==========================================
+// 6.5. IN-APP NOTIFICATIONS API
+// ==========================================
+
+// Get all notifications for logged-in user / admin
+app.get('/api/notifications', verifyToken(['admin', 'reseller']), async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.user!.id;
+    const role = req.user!.role;
+    
+    // Admins get administrative warnings/alerts (user_id IS NULL)
+    // Resellers get their own order and withdrawal statuses
+    const targetUserId = role === 'admin' ? null : Number(userId);
+    const list = await db.getNotifications(targetUserId);
+    return res.json(list);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Mark a single notification as read
+app.put('/api/notifications/:id/read', verifyToken(['admin', 'reseller']), async (req: AuthRequest, res: Response) => {
+  try {
+    const id = Number(req.params.id);
+    await db.markNotificationAsRead(id);
+    return res.json({ success: true, message: 'Notification marked as read.' });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Clear all notifications for user/admin
+app.delete('/api/notifications/clear', verifyToken(['admin', 'reseller']), async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.user!.id;
+    const role = req.user!.role;
+    const targetUserId = role === 'admin' ? null : Number(userId);
+    await db.clearNotifications(targetUserId);
+    return res.json({ success: true, message: 'All notifications cleared.' });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// ==========================================
 // 7. VITE MIDDLEWARE SETUP
 // ==========================================
 
 async function startServer() {
+  if (process.env.VERCEL === '1') {
+    // Skip dev server or port listening under Vercel serverless functions
+    return;
+  }
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -2238,3 +2371,5 @@ async function startServer() {
 }
 
 startServer();
+
+export default app;

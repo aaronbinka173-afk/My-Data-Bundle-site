@@ -7,20 +7,39 @@ import {
 } from 'firebase/firestore';
 import bcrypt from 'bcryptjs';
 
-const firebaseConfigPath = path.join(process.cwd(), 'firebase-applet-config.json');
 let firebaseApp: any = null;
 export let firestoreDb: any = null;
 export let isFirestore = false;
 
-if (fs.existsSync(firebaseConfigPath)) {
+let firebaseConfig: any = null;
+
+if (process.env.FIREBASE_CONFIG) {
   try {
-    const firebaseConfig = JSON.parse(fs.readFileSync(firebaseConfigPath, 'utf-8'));
+    firebaseConfig = JSON.parse(process.env.FIREBASE_CONFIG);
+  } catch (err) {
+    console.error('Failed to parse FIREBASE_CONFIG environment variable:', err);
+  }
+}
+
+if (!firebaseConfig) {
+  const firebaseConfigPath = path.join(process.cwd(), 'firebase-applet-config.json');
+  if (fs.existsSync(firebaseConfigPath)) {
+    try {
+      firebaseConfig = JSON.parse(fs.readFileSync(firebaseConfigPath, 'utf-8'));
+    } catch (err) {
+      console.error('Failed to read or parse firebase-applet-config.json:', err);
+    }
+  }
+}
+
+if (firebaseConfig) {
+  try {
     firebaseApp = initializeApp(firebaseConfig);
     firestoreDb = initializeFirestore(firebaseApp, {
       experimentalForceLongPolling: true,
     }, firebaseConfig.firestoreDatabaseId);
     isFirestore = true;
-    console.log('Firebase initialized in server/firebaseDb.ts using Database ID:', firebaseConfig.firestoreDatabaseId);
+    console.log('Firebase initialized in server/firebaseDb.ts using config database:', firebaseConfig.firestoreDatabaseId || '(default)');
   } catch (err) {
     console.error('Failed to initialize Firebase in server/firebaseDb.ts:', err);
   }
@@ -654,6 +673,57 @@ export const firebaseDb = {
     return newDoc;
   },
 
+  async getNotifications(userId: number | null): Promise<any[]> {
+    const colRef = collection(firestoreDb, 'notifications');
+    let q = query(colRef);
+    if (userId !== null) {
+      q = query(colRef, where('user_id', '==', Number(userId)));
+    } else {
+      q = query(colRef, where('user_id', '==', null));
+    }
+    const snap = await getDocs(q);
+    const list: any[] = [];
+    snap.forEach(d => {
+      list.push(d.data());
+    });
+    return list.sort((a, b) => b.id - a.id);
+  },
+
+  async createNotification(notification: { user_id: number | null; title: string; message: string; type: string }): Promise<any> {
+    const nextId = await getNextId('notifications');
+    const newNotif = {
+      id: nextId,
+      user_id: notification.user_id !== null ? Number(notification.user_id) : null,
+      title: notification.title,
+      message: notification.message,
+      type: notification.type,
+      is_read: false,
+      created_at: new Date().toISOString()
+    };
+    await setDoc(doc(firestoreDb, 'notifications', String(nextId)), newNotif);
+    return newNotif;
+  },
+
+  async markNotificationAsRead(id: number): Promise<boolean> {
+    await updateDoc(doc(firestoreDb, 'notifications', String(id)), { is_read: true });
+    return true;
+  },
+
+  async clearNotifications(userId: number | null): Promise<boolean> {
+    const colRef = collection(firestoreDb, 'notifications');
+    let q = query(colRef);
+    if (userId !== null) {
+      q = query(colRef, where('user_id', '==', Number(userId)));
+    } else {
+      q = query(colRef, where('user_id', '==', null));
+    }
+    const snap = await getDocs(q);
+    for (const d of snap.docs) {
+      await deleteDoc(doc(firestoreDb, 'notifications', d.id));
+    }
+    return true;
+  },
+
   async resetToProduction(): Promise<void> {
     const collectionsToClear = [
       'orders',
@@ -662,7 +732,8 @@ export const firebaseDb = {
       'sms_logs',
       'email_logs',
       'data_delivery_logs',
-      'ratings_reviews'
+      'ratings_reviews',
+      'notifications'
     ];
 
     for (const c of collectionsToClear) {

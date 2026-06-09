@@ -141,6 +141,32 @@ sudo certbot --nginx -d yourdomain.com -d www.yourdomain.com
 
 ---
 
+## ⚡ Method D: Deploying on Vercel.com (Serverless Mode)
+
+Vercel is a serverless hosting provider. Because it operates dynamically across transient function containers, long-running background Node processes or local filesystems (like local database `.json` caches) are reset dynamically. 
+
+By adding our native serverless routing configuration, **your backend API routes will run automatically on Vercel** as Serverless Functions, mapping `/api/*` perfectly using Vercel.
+
+### 1. Requirements Checklist
+- **Database**: You **MUST** use **Firebase Firestore** as your database on Vercel, as local JSON files will reset on every serverless execution.
+- **Firebase Configuration**: Provide your Firebase config safely in the Vercel dashboard (see Step 3).
+
+### 2. Prepare Code and Deploy
+1. Ensure `vercel.json` exists in the root folder of your project (this has been created for you).
+2. Ensure `/api/index.ts` is present in your code.
+3. Commit and push your code to your GitHub / Git repository, and link it inside your **Vercel Dashboard**.
+
+### 3. Set Up Vercel Environment Variables
+Under your project settings inside Vercel (`vercel.com/dashboard -> Project -> Settings -> Environment Variables`), add the following:
+- `NODE_ENV` = `production`
+- `JWT_SECRET` = `Your_Highly_Secure_JWT_Secret_String`
+- `FIREBASE_CONFIG` = `{ "apiKey": "...", "authDomain": "...", "projectId": "...", "storageBucket": "...", "messagingSenderId": "...", "appId": "..." }`
+  *(Tip: Open your `firebase-applet-config.json` file, copy everything, and paste it as a single string inside Vercel as `FIREBASE_CONFIG` value).*
+- `GEMINI_API_KEY` = `Your_Google_AI_Studio_Gemini_Key`
+- Any active SMS Gateway keys (e.g. `ARKESEL_API_KEY`, etc.)
+
+---
+
 ## ⚙️ Post-Deployment Live Activation Checklist (Going Live)
 
 Once your custom domain has loaded:

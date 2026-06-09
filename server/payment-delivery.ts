@@ -188,6 +188,35 @@ export async function sendOrderStatusNotification(orderId: number, status: 'deli
       smsSent ? 'Delivered' : 'Simulated'
     );
 
+    // 4. Create in-app system notifications for the persistent hub
+    if (status === 'delivered') {
+      if (order.reseller_id) {
+        await db.createNotification({
+          user_id: order.reseller_id,
+          title: `Order #${order.order_ref} Delivered`,
+          message: `Successfully delivered ${bundleName} to ${recipientPhone}. Your storefront earnings have been credited.`,
+          type: 'order_success'
+        }).catch((e: any) => console.log('Notification skip:', e));
+      }
+    } else if (status === 'failed') {
+      if (order.reseller_id) {
+        await db.createNotification({
+          user_id: order.reseller_id,
+          title: `Order #${order.order_ref} Failed`,
+          message: `Automated delivery of ${bundleName} to ${recipientPhone} failed. The platform administrator has been alerted to manually credit or resolve.`,
+          type: 'order_failed'
+        }).catch((e: any) => console.log('Notification skip:', e));
+      }
+
+      // ALERT ADMINS (user_id === null) regarding failed data deliveries
+      await db.createNotification({
+        user_id: null,
+        title: `CRITICAL: Data Delivery Failure`,
+        message: `Order #${order.order_ref} (${bundleName}) check out for customer phone ${recipientPhone} (Reseller ID: ${order.reseller_id || 'Direct Admin'}) failed to process automatically via gateway.`,
+        type: 'delivery_failure'
+      }).catch((e: any) => console.log('Notification skip:', e));
+    }
+
   } catch (err) {
     console.error('Error dispatching automated order notification:', err);
   }

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { 
-  DollarSign, Users, ShoppingCart, Landmark, ArrowUpRight, Copy, Check, Info, Settings2, RefreshCw, AlertCircle, Star, LogOut
+  DollarSign, Users, ShoppingCart, Landmark, ArrowUpRight, Copy, Check, Info, Settings2, RefreshCw, AlertCircle, Star, LogOut, Bell
 } from 'lucide-react';
 import { Bundle, ResellerAccount, WithdrawalRequest, Order } from '../types';
 import CheckoutModal from './CheckoutModal';
@@ -14,6 +14,10 @@ interface DashboardResellerProps {
 export default function DashboardReseller({ token, user, onLogout }: DashboardResellerProps) {
   const [activeTab, setActiveTab] = useState<'stats' | 'pricing' | 'customers' | 'orders' | 'withdrawals' | 'reviews'>('stats');
   
+  // Notifications States
+  const [notifications, setNotifications] = useState<any[]>([]);
+  const [notifDropdownOpen, setNotifDropdownOpen] = useState<boolean>(false);
+
   const [loading, setLoading] = useState<boolean>(true);
   const [purchaseBundle, setPurchaseBundle] = useState<any | null>(null);
   const [analytics, setAnalytics] = useState<any>(null);
@@ -49,11 +53,57 @@ export default function DashboardReseller({ token, user, onLogout }: DashboardRe
     setTimeout(() => setNotification(null), 4500);
   };
 
+  const fetchNotifications = async () => {
+    try {
+      const res = await fetch('/api/notifications', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setNotifications(data);
+      }
+    } catch (e) {
+      console.warn("Failed to retrieve reseller alerts:", e);
+    }
+  };
+
+  const handleMarkAsRead = async (id: number) => {
+    try {
+      const res = await fetch(`/api/notifications/${id}/read`, {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.ok) {
+        setNotifications(prev => prev.map(n => n.id === id ? { ...n, is_read: true } : n));
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleClearAllNotifications = async () => {
+    try {
+      const res = await fetch('/api/notifications/clear', {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.ok) {
+        setNotifications([]);
+        showNotification('All notifications cleared.', 'success');
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
   const fetchResellerData = async () => {
     setLoading(true);
     try {
       const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
       
+      // Load alerts
+      await fetchNotifications();
+
       // Fetch public/admin settings to get ceiling validation info
       const setR = await fetch('/api/bundles'); // get active bundles for comparison
       const setG = await fetch('/api/admin/settings', { headers }); // might trigger 403 if not admin, but backend handles it or we map average defaults
@@ -221,6 +271,77 @@ export default function DashboardReseller({ token, user, onLogout }: DashboardRe
             <RefreshCw className="w-4 h-4" />
             Synch Stats
           </button>
+
+          {/* Notifications Bell Dropdown */}
+          <div className="relative">
+            <button
+              onClick={() => setNotifDropdownOpen(!notifDropdownOpen)}
+              className="relative p-2 bg-slate-800 text-slate-300 hover:text-white rounded-lg hover:bg-slate-700 transition flex items-center justify-center animate-none"
+              title="Reseller Notifications & Alerts"
+            >
+              <Bell className="w-4 h-4" />
+              {notifications.filter(n => !n.is_read).length > 0 && (
+                <span className="absolute -top-1 -right-1 flex h-4.5 w-4.5 items-center justify-center rounded-full bg-amber-500 text-[10px] font-bold text-slate-950 animate-pulse font-sans">
+                  {notifications.filter(n => !n.is_read).length}
+                </span>
+              )}
+            </button>
+
+            {notifDropdownOpen && (
+              <div className="absolute right-0 mt-2 w-80 sm:w-96 rounded-xl border border-slate-800 bg-slate-950 shadow-2xl z-50 p-4">
+                <div className="flex items-center justify-between border-b border-slate-850 pb-2 mb-3">
+                  <h4 className="font-semibold text-xs text-slate-200 flex items-center gap-1.5">
+                    <Bell className="w-3.5 h-3.5 text-amber-500 animate-bounce" /> Storefront Activity alerts
+                  </h4>
+                  {notifications.length > 0 && (
+                    <button
+                      onClick={handleClearAllNotifications}
+                      className="text-xxs text-rose-450 hover:text-rose-400 hover:underline"
+                    >
+                      Clear All
+                    </button>
+                  )}
+                </div>
+
+                <div className="max-h-64 overflow-y-auto space-y-2 custom-scrollbar">
+                  {notifications.length === 0 ? (
+                    <div className="text-center py-6 text-xs text-slate-550">
+                      No active store alerts or delivery notifications.
+                    </div>
+                  ) : (
+                    notifications.map(n => (
+                      <div
+                        key={n.id}
+                        className={`p-2.5 rounded-lg border text-left transition ${
+                          n.is_read 
+                            ? 'bg-slate-900/40 border-slate-850 text-slate-505' 
+                            : 'bg-amber-500/5 border-amber-500/20 text-slate-200'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-1.5 mb-1">
+                          <span className={`text-xs font-bold leading-none ${n.is_read ? 'text-slate-400' : 'text-amber-450'}`}>
+                            {n.title}
+                          </span>
+                          {!n.is_read && (
+                            <button
+                              onClick={() => handleMarkAsRead(n.id)}
+                              className="text-[10px] text-amber-500 hover:underline leading-none shrink-0"
+                            >
+                              Mark read
+                            </button>
+                          )}
+                        </div>
+                        <p className="text-[11px] leading-relaxed break-words text-slate-355">{n.message}</p>
+                        <span className="block text-[9px] text-slate-500 font-mono mt-1">
+                          {new Date(n.created_at).toLocaleString()}
+                        </span>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
           
           {onLogout && (
             <button

@@ -160,6 +160,21 @@
         "created_at": { "type": "string", "format": "date-time" }
       },
       "required": ["id", "sender_id", "message", "status"]
+    },
+    "Notification": {
+      "title": "In App Notification",
+      "description": "Activity alerts and administrative system messages routed to users",
+      "type": "object",
+      "properties": {
+        "id": { "type": "integer" },
+        "user_id": { "type": "integer" },
+        "title": { "type": "string" },
+        "message": { "type": "string" },
+        "type": { "type": "string" },
+        "is_read": { "type": "boolean" },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "title", "message", "type", "is_read", "created_at"]
     }
   },
   "firestore": {
@@ -202,6 +217,10 @@
     "/sms_logs/{logId}": {
       "schema": "SmsLog",
       "description": "Broadcast SMS messages"
+    },
+    "/notifications/{notificationId}": {
+      "schema": "Notification",
+      "description": "In-app system and user status notifications"
     }
   }
 }
