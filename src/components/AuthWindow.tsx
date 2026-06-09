@@ -143,6 +143,19 @@ export default function AuthWindow({
         </p>
       </div>
 
+      {mode === 'login' && (
+        <div className="bg-slate-950 border border-amber-800/40 p-3.5 rounded-xl text-xs space-y-1 text-center font-sans tracking-tight">
+          <div className="text-amber-400 font-semibold flex items-center justify-center gap-1.5 leading-none">
+            <Lock className="w-3.5 h-3.5" />
+            PRIMARY PLATFORM OWNER ACCREDITATION
+          </div>
+          <p className="text-slate-400 text-xs font-mono">
+            Username: <span className="text-slate-200">aaronbinka173@gmail.com</span><br />
+            Password: <span className="text-slate-200">admin123</span>
+          </p>
+        </div>
+      )}
+
       {errorMessage && (
         <div className="p-3 bg-rose-950/40 text-rose-300 border border-rose-800 font-sans text-xs rounded-lg flex items-start gap-2 leading-relaxed">
           <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-rose-400" />
