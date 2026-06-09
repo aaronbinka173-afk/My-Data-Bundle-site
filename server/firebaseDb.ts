@@ -6,6 +6,7 @@ import {
   collection, query, where, deleteDoc 
 } from 'firebase/firestore';
 import bcrypt from 'bcryptjs';
+import firebaseConfigDoc from '../firebase-applet-config.json';
 
 let firebaseApp: any = null;
 export let firestoreDb: any = null;
@@ -22,14 +23,7 @@ if (process.env.FIREBASE_CONFIG) {
 }
 
 if (!firebaseConfig) {
-  const firebaseConfigPath = path.join(process.cwd(), 'firebase-applet-config.json');
-  if (fs.existsSync(firebaseConfigPath)) {
-    try {
-      firebaseConfig = JSON.parse(fs.readFileSync(firebaseConfigPath, 'utf-8'));
-    } catch (err) {
-      console.error('Failed to read or parse firebase-applet-config.json:', err);
-    }
-  }
+  firebaseConfig = firebaseConfigDoc;
 }
 
 if (firebaseConfig) {

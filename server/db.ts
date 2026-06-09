@@ -641,8 +641,12 @@ export async function initDb() {
           reviews_interval: 20
         }
       };
-      fs.writeFileSync(DB_FILE_PATH, JSON.stringify(initialData, null, 2));
-      console.log('Seed JSON database created.');
+      try {
+        fs.writeFileSync(DB_FILE_PATH, JSON.stringify(initialData, null, 2));
+        console.log('Seed JSON database created.');
+      } catch (err) {
+        console.error('Failed to write initial seed JSON database:', err);
+      }
     }
 
     // Auto-seed/promote owner email as admin in JSON database
@@ -706,34 +710,77 @@ async function insertSettingIfNotExist(key: string, value: string) {
 
 // Low-level helper to load local JSON Database
 function loadJsonDb(): JsonDatabase {
+  const fallbackDb: JsonDatabase = {
+    users: [],
+    bundles: [],
+    reseller_pricing: [],
+    orders: [],
+    payments: [],
+    reseller_accounts: [],
+    withdrawal_requests: [],
+    data_delivery_logs: [],
+    admin_settings: {},
+    sms_logs: [],
+    ratings_reviews: []
+  };
+
   if (!fs.existsSync(DB_FILE_PATH)) {
-    return {
-      users: [],
-      bundles: [],
-      reseller_pricing: [],
-      orders: [],
-      payments: [],
-      reseller_accounts: [],
-      withdrawal_requests: [],
-      data_delivery_logs: [],
-      admin_settings: {},
-      sms_logs: [],
-      ratings_reviews: []
-    };
+    return fallbackDb;
   }
-  const data = JSON.parse(fs.readFileSync(DB_FILE_PATH, 'utf-8'));
-  if (!data.sms_logs) {
-    data.sms_logs = [];
+
+  try {
+    const raw = fs.readFileSync(DB_FILE_PATH, 'utf-8');
+    if (!raw.trim()) {
+      return fallbackDb;
+    }
+    const data = JSON.parse(raw);
+    if (!data.users) {
+      data.users = [];
+    }
+    if (!data.bundles) {
+      data.bundles = [];
+    }
+    if (!data.reseller_pricing) {
+      data.reseller_pricing = [];
+    }
+    if (!data.orders) {
+      data.orders = [];
+    }
+    if (!data.payments) {
+      data.payments = [];
+    }
+    if (!data.reseller_accounts) {
+      data.reseller_accounts = [];
+    }
+    if (!data.withdrawal_requests) {
+      data.withdrawal_requests = [];
+    }
+    if (!data.data_delivery_logs) {
+      data.data_delivery_logs = [];
+    }
+    if (!data.admin_settings) {
+      data.admin_settings = {};
+    }
+    if (!data.sms_logs) {
+      data.sms_logs = [];
+    }
+    if (!data.ratings_reviews) {
+      data.ratings_reviews = [];
+    }
+    return data;
+  } catch (err) {
+    console.error('Failed to load JSON database:', err);
+    return fallbackDb;
   }
-  if (!data.ratings_reviews) {
-    data.ratings_reviews = [];
-  }
-  return data;
 }
 
 // Low-level helper to save local JSON Database
 function saveJsonDb(data: JsonDatabase) {
-  fs.writeFileSync(DB_FILE_PATH, JSON.stringify(data, null, 2));
+  try {
+    fs.writeFileSync(DB_FILE_PATH, JSON.stringify(data, null, 2));
+  } catch (err) {
+    console.error('Failed to write to DB_FILE_PATH:', err);
+  }
   try {
     fs.writeFileSync(OLD_DB_FILE_PATH, JSON.stringify(data, null, 2));
   } catch (err) {
