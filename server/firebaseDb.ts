@@ -14,12 +14,53 @@ export let isFirestore = false;
 
 let firebaseConfig: any = null;
 
-if (process.env.FIREBASE_CONFIG) {
+function parseFirebaseConfig(val: string): any {
+  if (!val) return null;
+  const trimmed = val.trim();
+  
+  // 1. Try standard JSON
   try {
-    firebaseConfig = JSON.parse(process.env.FIREBASE_CONFIG);
-  } catch (err) {
-    console.error('Failed to parse FIREBASE_CONFIG environment variable:', err);
+    return JSON.parse(trimmed);
+  } catch (e) {
+    // Fallback to JS evaluator for standard JS block copy-pastes
   }
+
+  // 2. Try compiling as executable block to resolve JS definitions
+  try {
+    const fn = new Function(`
+      let config = null;
+      let firebaseConfig = null;
+      ${trimmed}
+      if (typeof firebaseConfig !== "undefined" && firebaseConfig !== null) return firebaseConfig;
+      if (typeof config !== "undefined" && config !== null) return config;
+      const keys = Object.keys(this || {});
+      for (const k of keys) {
+        if (typeof this[k] === 'object' && this[k] !== null) {
+          return this[k];
+        }
+      }
+      return null;
+    `);
+    const scope: any = {};
+    const result = fn.call(scope);
+    if (result && typeof result === 'object' && result.projectId) {
+      return result;
+    }
+
+    // 3. Try parsing as direct JS object literal
+    const fnLiteral = new Function(`return (${trimmed});`);
+    const literalResult = fnLiteral();
+    if (literalResult && typeof literalResult === 'object' && literalResult.projectId) {
+      return literalResult;
+    }
+  } catch (err) {
+    console.log('Soft-skip: using alternative config mapping fallback.', err instanceof Error ? err.message : String(err));
+  }
+  return null;
+}
+
+if (process.env.FIREBASE_CONFIG) {
+  firebaseConfig = parseFirebaseConfig(process.env.FIREBASE_CONFIG);
 }
 
 if (!firebaseConfig) {
