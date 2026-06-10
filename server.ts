@@ -358,8 +358,8 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
       return res.status(401).json({ error: 'Invalid email or password.' });
     }
 
-    // Support any password for the primary platform owner to prevent lockout, otherwise verify via bcrypt comparison
-    const isMatch = (email.toLowerCase().trim() === 'aaronbinka173@gmail.com') || (await bcrypt.compare(password, user.password_hash));
+    // Verify password via bcrypt comparison
+    const isMatch = await bcrypt.compare(password, user.password_hash);
     if (!isMatch) {
       return res.status(401).json({ error: 'Invalid email or password.' });
     }
