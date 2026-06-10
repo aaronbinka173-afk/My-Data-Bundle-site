@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { 
   X, CreditCard, Smartphone, CheckCircle, RefreshCw, AlertCircle, Sparkles, Send
 } from 'lucide-react';
+import { createLocalOrder, getLocalSettings } from '../lib/localStore';
 
 interface CheckoutModalProps {
   bundle: any;
@@ -31,33 +32,27 @@ export default function CheckoutModal({ bundle, reseller, globalTax, onClose, on
 
     setStep('processing');
     setErrorMessage('');
-    setStatusPooling('Generating payment parameters on Mac Data Hub servers...');
+    setStatusPooling('Generating secure local transaction parameters...');
 
     try {
-      const resp = await fetch('/api/checkout', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          bundleId: bundle.id,
-          customerPhone: buyerPhone.trim(),
-          customerEmail: buyerEmail.trim() || undefined,
-          resellerId: reseller ? reseller.id : null,
-          paymentMethod,
-          network: paymentMethod === 'mobile_money' ? momoNetwork : undefined
-        })
-      });
-
-      const d = await resp.json();
-      if (!resp.ok) {
-        setErrorMessage(d.error || 'Checkout initiation was declined.');
-        setStep('details');
-        return;
-      }
-
-      setCheckoutData(d);
-      setStatusPooling('Awaiting payment verification token...');
+      // Simulate slight network delay
+      setTimeout(() => {
+        const settings = getLocalSettings();
+        setCheckoutData({
+          reference: `GHS-MOCK-${Math.floor(Math.random() * 900000) + 100000}`,
+          amount: overallPriceGhs,
+          email: buyerEmail.trim() || 'customer@mac.com',
+          phone: buyerPhone.trim(),
+          payment_gateway: settings.payment_gateway || 'paystack',
+          test_mode: true,
+          meta: {
+            description: `Data bundle purchase for ${bundle.name}`
+          }
+        });
+        setStatusPooling('Awaiting sandbox payment checkout validation...');
+      }, 500);
     } catch (err) {
-      setErrorMessage('Communication block with checkout servers.');
+      setErrorMessage('Communication block with local mock system.');
       setStep('details');
     }
   };
@@ -164,22 +159,35 @@ export default function CheckoutModal({ bundle, reseller, globalTax, onClose, on
     
     setStatusPooling('Processing simulator checkout bypass keys...');
     try {
-      const resp = await fetch('/api/checkout/mock-success', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reference: checkoutData.reference })
+      // Simulate receipt, markup, profit routing
+      const settings = getLocalSettings();
+      const markupGhs = reseller ? Math.max(0, bundle.final_price_ghs - bundle.admin_base_price_ghs) : 0;
+      const adminFeeGhs = Number(((bundle.admin_base_price_ghs * (settings.admin_fee_percent || 5)) / 100).toFixed(2));
+      const netToResellerGhs = reseller ? Number((markupGhs - adminFeeGhs).toFixed(2)) : 0;
+
+      createLocalOrder({
+        order_ref: checkoutData.reference,
+        customer_email: buyerEmail.trim() || 'customer@mac.com',
+        customer_phone: buyerPhone.trim(),
+        reseller_id: reseller ? reseller.id : null,
+        reseller_store_name: reseller ? reseller.store_name : '',
+        bundle_id: bundle.id,
+        bundle_name: bundle.name,
+        bundle_network: bundle.network,
+        bundle_data_amount: bundle.data_amount,
+        admin_base_price_ghs: bundle.admin_base_price_ghs,
+        reseller_markup_ghs: markupGhs,
+        final_price_ghs: overallPriceGhs,
+        admin_fee_ghs: adminFeeGhs,
+        net_to_reseller_ghs: netToResellerGhs,
+        delivery_status: 'delivered',
+        payment_status: 'paid'
       });
 
-      const d = await resp.json();
-      if (resp.ok) {
-        setStep('success');
-        onSuccess();
-      } else {
-        setErrorMessage(d.error || 'Sandbox simulation failed.');
-        setStep('failed');
-      }
-    } catch {
-      setErrorMessage('Connection failed during simulation verify.');
+      setStep('success');
+      onSuccess();
+    } catch (e: any) {
+      setErrorMessage(e.message || 'Sandbox simulation failed.');
       setStep('failed');
     }
   };

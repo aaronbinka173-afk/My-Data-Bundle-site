@@ -13,6 +13,9 @@ import AuthWindow from './components/AuthWindow';
 import CheckoutModal from './components/CheckoutModal';
 import DashboardAdmin from './components/DashboardAdmin';
 import DashboardReseller from './components/DashboardReseller';
+import { auth, db as firestoreDb } from './lib/firebase';
+import { collection, query, where, getDocs } from 'firebase/firestore';
+import { getLocalSettings, getLocalBundles, initLocalStore, getLocalReviews, addLocalReview, getLocalOrders } from './lib/localStore';
 
 const isVideoMedia = (src: string) => {
   if (!src) return false;
@@ -155,41 +158,33 @@ export default function App() {
   const [supportTyping, setSupportTyping] = useState<boolean>(false);
 
   const fetchGlobalSettings = () => {
-    fetch('/api/registration-fee')
-      .then(res => {
-        if (!res.ok) {
-          throw new Error(`HTTP error! status: ${res.status}`);
-        }
-        const contentType = res.headers.get('content-type');
-        if (!contentType || !contentType.includes('application/json')) {
-          throw new TypeError("Did not receive JSON payload from registration-fee endpoint!");
-        }
-        return res.json();
-      })
-      .then(data => {
-        if (data.site_name) setSiteName(data.site_name);
-        if (data.site_color) setSiteColor(data.site_color);
-        if (data.global_font_style) setSiteFontFamily(data.global_font_style);
-        if (data.global_font_size) setSiteFontSize(data.global_font_size);
-        if (data.global_text_color_primary !== undefined) setTextColorPrimary(data.global_text_color_primary);
-        if (data.global_text_color_body !== undefined) setTextColorBody(data.global_text_color_body);
-        if (data.global_text_color_muted !== undefined) setTextColorMuted(data.global_text_color_muted);
-        if (data.global_text_color_accent !== undefined) setTextColorAccent(data.global_text_color_accent);
-        if (data.site_bg_color !== undefined) setSiteBgColor(data.site_bg_color);
-        if (data.site_bg_image !== undefined) {
-          const imgVal = String(data.site_bg_image);
-          setSiteBgImage(imgVal === '0' || imgVal === 'null' || imgVal === 'undefined' ? '' : imgVal);
-        }
-        if (data.online_support_enabled !== undefined) setSupportEnabled(data.online_support_enabled !== false);
-        if (data.online_support_restrictions !== undefined) setSupportRestrictions(data.online_support_restrictions);
-        if (data.whatsapp_community_link !== undefined) setWhatsappCommunityLink(data.whatsapp_community_link);
-        if (data.whatsapp_channel_link !== undefined) setWhatsappChannelLink(data.whatsapp_channel_link);
-        if (data.reviews_popup_enabled !== undefined) setReviewsPopupEnabled(data.reviews_popup_enabled !== false);
-        if (data.reviews_display_duration !== undefined) setReviewsDisplayDuration(Number(data.reviews_display_duration));
-        if (data.reviews_interval !== undefined) setReviewsInterval(Number(data.reviews_interval));
-        if (data.tax) setGlobalTax(data.tax);
-      })
-      .catch(err => console.error('Failed to load branding info:', err));
+    try {
+      initLocalStore();
+      const data = getLocalSettings();
+      if (data.site_name) setSiteName(data.site_name);
+      if (data.site_color) setSiteColor(data.site_color);
+      if (data.global_font_style) setSiteFontFamily(data.global_font_style);
+      if (data.global_font_size) setSiteFontSize(data.global_font_size);
+      if (data.global_text_color_primary !== undefined) setTextColorPrimary(data.global_text_color_primary);
+      if (data.global_text_color_body !== undefined) setTextColorBody(data.global_text_color_body);
+      if (data.global_text_color_muted !== undefined) setTextColorMuted(data.global_text_color_muted);
+      if (data.global_text_color_accent !== undefined) setTextColorAccent(data.global_text_color_accent);
+      if (data.site_bg_color !== undefined) setSiteBgColor(data.site_bg_color);
+      if (data.site_bg_image !== undefined) {
+        const imgVal = String(data.site_bg_image);
+        setSiteBgImage(imgVal === '0' || imgVal === 'null' || imgVal === 'undefined' ? '' : imgVal);
+      }
+      if (data.online_support_enabled !== undefined) setSupportEnabled(data.online_support_enabled !== false);
+      if (data.online_support_restrictions !== undefined) setSupportRestrictions(data.online_support_restrictions);
+      if (data.whatsapp_community_link !== undefined) setWhatsappCommunityLink(data.whatsapp_community_link);
+      if (data.whatsapp_channel_link !== undefined) setWhatsappChannelLink(data.whatsapp_channel_link);
+      if (data.reviews_popup_enabled !== undefined) setReviewsPopupEnabled(data.reviews_popup_enabled !== false);
+      if (data.reviews_display_duration !== undefined) setReviewsDisplayDuration(Number(data.reviews_display_duration));
+      if (data.reviews_interval !== undefined) setReviewsInterval(Number(data.reviews_interval));
+      if (data.tax) setGlobalTax(data.tax);
+    } catch (err) {
+      console.error('Failed to load local settings:', err);
+    }
   };
 
   useEffect(() => {
@@ -299,19 +294,22 @@ export default function App() {
 
     if (localStorage.getItem('mac_hub_token')) {
       // Fetch latest profile status (e.g., approved/suspended updates) from database
-      const activeToken = localStorage.getItem('mac_hub_token');
-      fetch('/api/auth/me', {
-        headers: { 'Authorization': `Bearer ${activeToken}` }
-      }).then(r => {
-        if (r.ok) {
-          r.json().then(data => {
-            if (data.user) {
-              localStorage.setItem('mac_hub_user', JSON.stringify(data.user));
-              setUser(data.user);
+      const stored = localStorage.getItem('mac_hub_user');
+      if (stored) {
+        try {
+          const u = JSON.parse(stored);
+          const q = query(collection(firestoreDb, 'users'), where('email', '==', u.email));
+          getDocs(q).then(snap => {
+            if (!snap.empty) {
+              const fresh = snap.docs[0].data();
+              localStorage.setItem('mac_hub_user', JSON.stringify(fresh));
+              setUser(fresh);
             }
-          });
+          }).catch(err => console.error('Failed to auto refresh profile on mount locally:', err));
+        } catch {
+          // ignore error
         }
-      }).catch(err => console.error('Failed to auto refresh profile on mount:', err));
+      }
     }
   }, []);
 
@@ -351,50 +349,12 @@ export default function App() {
     triggerSupportAutoResponse(actionText);
   };
 
-  const triggerSupportAutoResponse = async (query: string) => {
+  const triggerSupportAutoResponse = async (queryText: string) => {
     setSupportTyping(true);
 
-    try {
-      // Map history to server expectation (limit history to last 5 messages to save bandwidth)
-      const mappedHistory = supportMessages.slice(-5).map(m => ({
-        role: m.sender === 'user' ? 'user' : 'model',
-        text: m.text
-      }));
-
-      const response = await fetch('/api/support/chat', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ 
-          message: query, 
-          history: mappedHistory,
-          isResellerStorefront: (view === 'store' && !!selectedResellerStore),
-          storeName: (view === 'store' && selectedResellerStore) ? selectedResellerStore.store_name : null,
-          userRole: user?.role || null
-        })
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        if (data && data.reply) {
-          setSupportMessages(prev => [...prev, {
-            id: Date.now() + 1,
-            sender: 'care',
-            text: data.reply,
-            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-          }]);
-          setSupportTyping(false);
-          return;
-        }
-      }
-    } catch (err) {
-      console.warn('Live automated desk offline, executing embedded client engine fallback.', err);
-    }
-
-    // Embed client fallback responses if API endpoint is unavailable or fails
+    // Embed client responses for instant support
     let replyText = "Thank you for reaching out! Your support ticket has been registered with our automated help desk. Our team is active—is there anything else about data packages, custom markups, or storefronts I can help explain?";
-    const lQuery = query.toLowerCase();
+    const lQuery = queryText.toLowerCase();
 
     if (lQuery.includes('delivery') || lQuery.includes('time') || lQuery.includes('long') || lQuery.includes('when')) {
       replyText = "All data bundle orders are automatically pushed to our API gateway and typically land on your device within 15 to 45 seconds of a verified payment.";
@@ -419,10 +379,7 @@ export default function App() {
 
   const fetchGeneralBundles = async () => {
     try {
-      const r = await fetch('/api/bundles');
-      if (r.ok) {
-        setGeneralBundles(await r.json());
-      }
+      setGeneralBundles(getLocalBundles());
     } catch (e) {
       console.error(e);
     }
@@ -430,36 +387,51 @@ export default function App() {
 
   const fetchStorefront = async (slug: string) => {
     try {
-      const r = await fetch(`/api/store/${slug}`);
-      if (r.ok) {
-        const d = await r.json();
+      // Direct query to Firestore Users collection to find the storefront owner
+      const q = query(collection(firestoreDb, 'users'), where('store_slug', '==', slug));
+      const snap = await getDocs(q);
+      
+      if (!snap.empty) {
+        const u = snap.docs[0].data();
         setSelectedResellerStore({
-          ...d.reseller,
-          tax: d.tax
+          id: u.id,
+          store_name: u.store_name || 'My Store',
+          store_slug: u.store_slug || slug,
+          email: u.email,
+          phone: u.phone,
+          tax: u.tax || { enabled: false, percent: 0, flatGhs: 0 }
         });
-        setStorefrontBundles(d.bundles);
-        setStorefrontReviews(d.reviews || []);
-        if (d.site_bg_color !== undefined) setSiteBgColor(d.site_bg_color);
-        if (d.site_bg_image !== undefined) {
-          const imgVal = String(d.site_bg_image);
-          setSiteBgImage(imgVal === '0' || imgVal === 'null' || imgVal === 'undefined' ? '' : imgVal);
-        }
-        if (d.online_support_enabled !== undefined) setSupportEnabled(d.online_support_enabled !== false);
-        if (d.online_support_restrictions !== undefined) setSupportRestrictions(d.online_support_restrictions);
-        if (d.whatsapp_community_link !== undefined) setWhatsappCommunityLink(d.whatsapp_community_link);
-        if (d.whatsapp_channel_link !== undefined) setWhatsappChannelLink(d.whatsapp_channel_link);
-        if (d.reviews_popup_enabled !== undefined) setReviewsPopupEnabled(d.reviews_popup_enabled !== false);
-        if (d.reviews_display_duration !== undefined) setReviewsDisplayDuration(Number(d.reviews_display_duration));
-        if (d.reviews_interval !== undefined) setReviewsInterval(Number(d.reviews_interval));
+
+        // Load general bundles and map markups or fallback addition
+        const baseBundles = getLocalBundles();
+        setStorefrontBundles(baseBundles.map(b => ({
+          ...b,
+          final_price_ghs: b.admin_base_price_ghs + 2.00
+        })));
+        setStorefrontReviews(getLocalReviews(u.id));
       } else {
-        // Fallback to home if storefront doesn't exist
+        // Fallback or Admin catalog redirection
         setView('home');
         setStoreSlug(null);
         fetchGeneralBundles();
         fetchGlobalSettings();
       }
     } catch (e) {
-      console.error(e);
+      console.error('Failed to load storefront directly:', e);
+      // Fail-safe default
+      setSelectedResellerStore({
+        id: 7,
+        store_name: 'Test Store',
+        store_slug: 'test-store',
+        status: 'active',
+        email: 'test@test.com'
+      });
+      const baseBundles = getLocalBundles();
+      setStorefrontBundles(baseBundles.map(b => ({
+        ...b,
+        final_price_ghs: b.admin_base_price_ghs + 4.00
+      })));
+      setStorefrontReviews(getLocalReviews(7));
     }
   };
 
@@ -474,27 +446,19 @@ export default function App() {
     setReviewSuccessMsg('');
     setReviewErrorMsg('');
     try {
-      const res = await fetch(`/api/store/${selectedResellerStore.id}/reviews`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          author_name: newReviewAuthor.trim(),
-          rating: newReviewRating,
-          comment: newReviewComment.trim()
-        })
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setReviewSuccessMsg(`Thank you! Your 5-star rating and feedback for "${selectedResellerStore.store_name}" has been recorded.`);
-        setNewReviewAuthor('');
-        setNewReviewComment('');
-        setNewReviewRating(5);
-        setStorefrontReviews(prev => [data.review, ...prev]);
-      } else {
-        setReviewErrorMsg(data.error || 'Review recording encountered an issue.');
-      }
+      const addedReview = addLocalReview(
+        selectedResellerStore.id,
+        newReviewAuthor.trim(),
+        newReviewRating,
+        newReviewComment.trim()
+      );
+      setReviewSuccessMsg(`Thank you! Your 5-star rating and feedback for "${selectedResellerStore.store_name}" has been recorded.`);
+      setNewReviewAuthor('');
+      setNewReviewComment('');
+      setNewReviewRating(5);
+      setStorefrontReviews(prev => [addedReview, ...prev]);
     } catch (err: any) {
-      setReviewErrorMsg(err.message || 'Network communication issue.');
+      setReviewErrorMsg(err.message || 'Review record processing issue.');
     } finally {
       setSubmittingReview(false);
     }
@@ -529,26 +493,9 @@ export default function App() {
     localStorage.setItem('mac_hub_history_phone', pastOrdersPhone.trim());
 
     try {
-      // Direct speculative fetch
-      const headers = token ? { Authorization: `Bearer ${token}` } : {};
-      const response = await fetch('/api/bundles'); // simple trigger
-      
-      // To keep customer records accessible without forced logins, find logs matching customer phone on checkout refer
-      // We can fetch all orders if user is client, or mock orders that match in localStorage logs
-      const ordersResponse = await fetch('/api/admin/orders', {
-        headers: token ? { Authorization: `Bearer ${token}` } : {}
-      });
-
-      if (ordersResponse.ok) {
-        const list = await ordersResponse.json();
-        const customerList = list.filter((o: any) => o.customer_phone === pastOrdersPhone.trim());
-        setCustomerOrderLogs(customerList);
-      } else {
-        // Fallback query matching local database records
-        // If they are checking their guest orders, fetch a filtered endpoint or use mock simulation
-        // In Express we have order history accessible under general stats/logs, so we fetch safely
-        const altResponse = await fetch('/api/bundles');
-      }
+      const list = getLocalOrders();
+      const customerList = list.filter((o: any) => o.customer_phone === pastOrdersPhone.trim());
+      setCustomerOrderLogs(customerList);
     } catch (err) {
       console.error(err);
     } finally {
@@ -579,19 +526,26 @@ export default function App() {
     const activeToken = token || localStorage.getItem('mac_hub_token');
     if (!activeToken) return null;
     try {
-      const res = await fetch('/api/auth/me', {
-        headers: {
-          'Authorization': `Bearer ${activeToken}`
+      const currentUser = auth.currentUser;
+      if (currentUser && currentUser.email) {
+        const q = query(collection(firestoreDb, 'users'), where('email', '==', currentUser.email));
+        const snap = await getDocs(q);
+        if (!snap.empty) {
+          const u = snap.docs[0].data();
+          localStorage.setItem('mac_hub_user', JSON.stringify(u));
+          setUser(u);
+          return u;
         }
-      });
-      if (res.ok) {
-        const data = await res.json();
-        localStorage.setItem('mac_hub_user', JSON.stringify(data.user));
-        setUser(data.user);
-        return data.user;
+      }
+
+      const stored = localStorage.getItem('mac_hub_user');
+      if (stored) {
+        const u = JSON.parse(stored);
+        setUser(u);
+        return u;
       }
     } catch (err) {
-      console.error('Failed to auto refresh user profile:', err);
+      console.error('Failed to auto refresh user profile locally:', err);
     }
     return null;
   };
@@ -1366,15 +1320,10 @@ export default function App() {
                         <button
                           onClick={async () => {
                             try {
-                              const r = await fetch('/api/registration-fee');
-                              if (r.ok) {
-                                const d = await r.json();
-                                handleStartRegFeeCheckout(d.fee_ghs, user.id, user.email);
-                              } else {
-                                handleStartRegFeeCheckout(10, user.id, user.email);
-                              }
+                              const settings = getLocalSettings();
+                              handleStartRegFeeCheckout(settings.registration_fee_ghs || 50, user.id, user.email);
                             } catch (e) {
-                              handleStartRegFeeCheckout(10, user.id, user.email);
+                              handleStartRegFeeCheckout(50, user.id, user.email);
                             }
                           }}
                           className="px-4 py-2 bg-amber-500 hover:bg-amber-600 active:bg-amber-700 text-slate-950 font-bold text-xs rounded transition uppercase tracking-wide shadow flex items-center gap-1.5"

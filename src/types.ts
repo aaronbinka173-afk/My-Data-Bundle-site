@@ -148,4 +148,9 @@ export interface AdminSettings {
   reviews_display_duration?: number;
   reviews_interval?: number;
   vtu_balance_threshold?: number;
+  tax?: {
+    enabled: boolean;
+    percent: number;
+    flatGhs: number;
+  };
 }
