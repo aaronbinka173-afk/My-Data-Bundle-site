@@ -3,8 +3,9 @@ import {
   Lock, Mail, Eye, EyeOff, Store, Phone, Keyboard, AlertCircle, Sparkles, CheckSquare
 } from 'lucide-react';
 import { AdminSettings } from '../types';
-import { auth } from '../lib/firebase';
+import { auth, db as firestoreDb } from '../lib/firebase';
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
+import { collection, query, where, getDocs, doc, setDoc } from 'firebase/firestore';
 
 interface AuthWindowProps {
   onAuthSuccess: (token: string, user: any) => void;
@@ -46,26 +47,7 @@ export default function AuthWindow({
   const [loading, setLoading] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string>('');
 
-  const [adminPricePolicy, setAdminPricePolicy] = useState<{ fee: number; enabled: boolean } | null>(null);
-
-  // Load registration settings immediately on render
-  React.useEffect(() => {
-    fetch('/api/registration-fee')
-      .then(res => {
-        if (!res.ok) throw new Error('Failed to retrieve registration settings');
-        return res.json();
-      })
-      .then(data => {
-        setAdminPricePolicy({
-          fee: data.fee_ghs,
-          enabled: data.fee_enabled
-        });
-      })
-      .catch(() => {
-        // Fallback settings setup if connection fails
-        setAdminPricePolicy({ fee: 50.00, enabled: true });
-      });
-  }, []);
+  const adminPricePolicy = { fee: 0, enabled: false };
 
   const handleSlugCalculation = (title: string) => {
     setStoreName(title);
@@ -84,64 +66,74 @@ export default function AuthWindow({
         const userCredential = await signInWithEmailAndPassword(auth, email, password);
         const token = await userCredential.user.getIdToken();
 
-        // 2. Fetch User Profile database information
-        const response = await fetch('/api/auth/me', {
-          headers: {
-            'Authorization': `Bearer ${token}`
-          }
-        });
+        // 2. Fetch User Profile from Firestore query
+        const userDocQuery = query(collection(firestoreDb, 'users'), where('email', '==', email.toLowerCase().trim()));
+        const userDocSnap = await getDocs(userDocQuery);
+        let userData: any = null;
 
-        if (!response.ok) {
-          const data = await response.json();
-          setErrorMessage(data.error || 'Authentication attempt failed.');
-          setLoading(false);
-          return;
+        if (!userDocSnap.empty) {
+          userData = userDocSnap.docs[0].data();
+        } else {
+          // Fallback user auto-creation (e.g., if created via Firebase Auth console or seed)
+          const roleToAssign = (email.toLowerCase().trim() === 'aaronbinka173@gmail.com') ? 'admin' : 'reseller';
+          const id = Math.floor(Math.random() * 900000) + 100000;
+          userData = {
+            id,
+            email: email.toLowerCase().trim(),
+            role: roleToAssign,
+            status: 'active',
+            store_name: roleToAssign === 'reseller' ? 'My Store' : null,
+            store_slug: roleToAssign === 'reseller' ? `store-${id}` : null,
+            phone: null,
+            registration_fee_paid_ghs: 0,
+            storefront_enabled: true,
+            created_at: new Date().toISOString()
+          };
+          await setDoc(doc(firestoreDb, 'users', String(id)), userData);
+          if (roleToAssign === 'reseller') {
+            await setDoc(doc(firestoreDb, 'reseller_accounts', String(id)), {
+              user_id: Number(id),
+              balance_ghs: 100.00,
+              total_earned_ghs: 0,
+              total_customers: 0,
+              deduction_source: 'storefront_earnings'
+            });
+          }
         }
 
-        const data = await response.json();
-        onAuthSuccess(token, data.user);
+        onAuthSuccess(token, userData);
       } else {
         // 1. Register with Firebase Auth Client SDK first
         const userCredential = await createUserWithEmailAndPassword(auth, email, password);
         const token = await userCredential.user.getIdToken();
 
-        // 2. Post registration metadata to the backend endpoint
-        const body: any = { email, password, role };
+        // 2. Create the user object inside Firestore
+        const id = Math.floor(Math.random() * 900000) + 100000;
+        const newUser = {
+          id: id,
+          email: email.toLowerCase().trim(),
+          role: role, // 'customer' or 'reseller'
+          status: 'active',
+          store_name: role === 'reseller' ? storeName : null,
+          store_slug: role === 'reseller' ? storeSlug : null,
+          phone: role === 'reseller' ? phone : null,
+          registration_fee_paid_ghs: 0,
+          storefront_enabled: true,
+          created_at: new Date().toISOString()
+        };
+        await setDoc(doc(firestoreDb, 'users', String(id)), newUser);
 
         if (role === 'reseller') {
-          body.storeName = storeName;
-          body.storeSlug = storeSlug;
-          body.phone = phone;
+          await setDoc(doc(firestoreDb, 'reseller_accounts', String(id)), {
+            user_id: Number(id),
+            balance_ghs: 100.00,
+            total_earned_ghs: 0,
+            total_customers: 0,
+            deduction_source: 'storefront_earnings'
+          });
         }
 
-        const response = await fetch('/api/auth/register', {
-          method: 'POST',
-          headers: { 
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-          },
-          body: JSON.stringify(body)
-        });
-
-        const data = await response.json();
-        if (!response.ok) {
-          setErrorMessage(data.error || 'Registration failed.');
-          setLoading(false);
-          return;
-        }
-
-        // If registered successfully, but reseller entry paywall is active (status: pending_payment)
-        if (role === 'reseller' && data.user.status === 'pending_payment') {
-          const feeToPay = adminPricePolicy?.enabled ? adminPricePolicy.fee : 50;
-          onShowPaymentNotification(feeToPay, data.user.id, data.user.email);
-          setMode('login'); // redirect to login step for afterward entry
-          showRegistrationPaywallNotification();
-          setLoading(false);
-          return;
-        }
-
-        // Successful normal login after signup
-        onAuthSuccess(token, data.user);
+        onAuthSuccess(token, newUser);
       }
     } catch (err: any) {
       console.error(err);
