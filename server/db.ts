@@ -233,6 +233,40 @@ export async function initDb() {
           });
           console.log('Created missing owner credentials inside Cloud Firestore.');
         }
+
+        // --- SEED TEST USER IN FIREBASE AUTH & FIRESTORE DATABASE ---
+        try {
+          const { auth } = await import('./firebaseDb');
+          const { createUserWithEmailAndPassword } = await import('firebase/auth');
+          if (auth) {
+            await createUserWithEmailAndPassword(auth, 'test@test.com', 'test123');
+            console.log('Successfully created test user test@test.com in Firebase Authentication.');
+          }
+        } catch (authErr: any) {
+          if (authErr && authErr.code !== 'auth/email-already-in-use') {
+            console.warn('Firebase Auth test user creation warning:', authErr.message || authErr);
+          } else {
+            console.log('Firebase Auth test user test@test.com already exists.');
+          }
+        }
+
+        // Ensure user document exists for test@test.com in Firestore
+        const existingTestUser = await firebaseDb.getUserByEmail('test@test.com');
+        if (!existingTestUser) {
+          console.log('test@test.com Firestore user document not found. Auto-creating as active reseller...');
+          const seededUser = await firebaseDb.createUser({
+            email: 'test@test.com',
+            password_hash: '', // Firebase Auth handles password
+            role: 'reseller',
+            status: 'active',
+            store_name: 'Test Store',
+            store_slug: 'test-store',
+            phone: '0241112223',
+            registration_fee_paid_ghs: 50
+          });
+          await firebaseDb.createResellerAccount(seededUser.id, 100); // Give 100 GHS starting balance to test
+          console.log('test@test.com reseller documents generated successfully.');
+        }
       }
     } catch (importErr) {
       console.error('Failed to run Firestore configuration migrations:', importErr);

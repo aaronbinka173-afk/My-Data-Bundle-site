@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { initializeApp } from 'firebase/app';
+import { getAuth } from 'firebase/auth';
 import { 
   initializeFirestore, doc, getDoc, getDocs, setDoc, updateDoc, 
   collection, query, where, deleteDoc 
@@ -10,6 +11,7 @@ import firebaseConfigDoc from '../firebase-applet-config.json';
 
 let firebaseApp: any = null;
 export let firestoreDb: any = null;
+export let auth: any = null;
 export let isFirestore = false;
 
 let firebaseConfig: any = null;
@@ -100,6 +102,7 @@ if (!firebaseConfig) {
 if (firebaseConfig) {
   try {
     firebaseApp = initializeApp(firebaseConfig);
+    auth = getAuth(firebaseApp);
     firestoreDb = initializeFirestore(firebaseApp, {
       experimentalForceLongPolling: true,
     }, firebaseConfig.firestoreDatabaseId);

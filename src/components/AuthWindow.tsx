@@ -3,6 +3,8 @@ import {
   Lock, Mail, Eye, EyeOff, Store, Phone, Keyboard, AlertCircle, Sparkles, CheckSquare
 } from 'lucide-react';
 import { AdminSettings } from '../types';
+import { auth } from '../lib/firebase';
+import { signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
 
 interface AuthWindowProps {
   onAuthSuccess: (token: string, user: any) => void;
@@ -77,50 +79,81 @@ export default function AuthWindow({
     setLoading(true);
 
     try {
-      const endpoint = mode === 'login' ? '/api/auth/login' : '/api/auth/register';
-      const body: any = { email, password };
+      if (mode === 'login') {
+        // 1. Authenticate with Firebase Auth Client SDK
+        const userCredential = await signInWithEmailAndPassword(auth, email, password);
+        const token = await userCredential.user.getIdToken();
 
-      if (mode === 'register') {
-        body.role = role;
+        // 2. Fetch User Profile database information
+        const response = await fetch('/api/auth/me', {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        });
+
+        if (!response.ok) {
+          const data = await response.json();
+          setErrorMessage(data.error || 'Authentication attempt failed.');
+          setLoading(false);
+          return;
+        }
+
+        const data = await response.json();
+        onAuthSuccess(token, data.user);
+      } else {
+        // 1. Register with Firebase Auth Client SDK first
+        const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+        const token = await userCredential.user.getIdToken();
+
+        // 2. Post registration metadata to the backend endpoint
+        const body: any = { email, password, role };
+
         if (role === 'reseller') {
           body.storeName = storeName;
           body.storeSlug = storeSlug;
           body.phone = phone;
         }
+
+        const response = await fetch('/api/auth/register', {
+          method: 'POST',
+          headers: { 
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify(body)
+        });
+
+        const data = await response.json();
+        if (!response.ok) {
+          setErrorMessage(data.error || 'Registration failed.');
+          setLoading(false);
+          return;
+        }
+
+        // If registered successfully, but reseller entry paywall is active (status: pending_payment)
+        if (role === 'reseller' && data.user.status === 'pending_payment') {
+          const feeToPay = adminPricePolicy?.enabled ? adminPricePolicy.fee : 50;
+          onShowPaymentNotification(feeToPay, data.user.id, data.user.email);
+          setMode('login'); // redirect to login step for afterward entry
+          showRegistrationPaywallNotification();
+          setLoading(false);
+          return;
+        }
+
+        // Successful normal login after signup
+        onAuthSuccess(token, data.user);
       }
-
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-      });
-
-      const data = await response.json();
-      if (!response.ok) {
-        setErrorMessage(data.error || 'Authentication attempt failed.');
-        setLoading(false);
-        return;
-      }
-
-      // If registered successfully, but reseller entry paywall is active (status: pending_payment)
-      if (mode === 'register' && role === 'reseller' && data.user.status === 'pending_payment') {
-        const feeToPay = adminPricePolicy?.enabled ? adminPricePolicy.fee : 50;
-        onShowPaymentNotification(feeToPay, data.user.id, data.user.email);
-        setMode('login'); // redirect to login step for afterward entry
-        showRegistrationPaywallNotification();
-        setLoading(false);
-        return;
-      }
-
-      // Successful normal login
-      onAuthSuccess(data.token, data.user);
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      if (window.location.hostname.endsWith('.vercel.app') || window.location.hostname.includes('vercel')) {
-        setErrorMessage('Failed to connect to Vercel backend. Make sure your FIREBASE_CONFIG or DATABASE_URL environment variables are configured in the Vercel dashboard and your deploy completed.');
-      } else {
-        setErrorMessage('Failed to connect to authorization servers. Please check if your backend is running.');
+      let localMsg = err.message || 'Authentication attempt failed.';
+      if (err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {
+        localMsg = 'Invalid email address or password. Please try again.';
+      } else if (err.code === 'auth/email-already-in-use') {
+        localMsg = 'Email address already registered. Please login instead.';
+      } else if (err.code === 'auth/network-request-failed') {
+        localMsg = 'Network connection failed. Please check your internet connection.';
       }
+      setErrorMessage(localMsg);
     } finally {
       setLoading(false);
     }
