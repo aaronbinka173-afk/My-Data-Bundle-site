@@ -22,40 +22,67 @@ function parseFirebaseConfig(val: string): any {
   try {
     return JSON.parse(trimmed);
   } catch (e) {
-    // Fallback to JS evaluator for standard JS block copy-pastes
+    // Fallback
   }
 
-  // 2. Try compiling as executable block to resolve JS definitions
+  // 2. Try extract via Regex if it's a JS/TS constant block or similar
   try {
-    const fn = new Function(`
-      let config = null;
-      let firebaseConfig = null;
-      ${trimmed}
-      if (typeof firebaseConfig !== "undefined" && firebaseConfig !== null) return firebaseConfig;
-      if (typeof config !== "undefined" && config !== null) return config;
-      const keys = Object.keys(this || {});
-      for (const k of keys) {
-        if (typeof this[k] === 'object' && this[k] !== null) {
-          return this[k];
-        }
+    const config: any = {};
+    const keys = [
+      'apiKey', 'authDomain', 'projectId', 'storageBucket', 
+      'messagingSenderId', 'appId', 'measurementId', 'firestoreDatabaseId'
+    ];
+    let matched = false;
+    for (const key of keys) {
+      // Matches both "key": "value" and key: "value", handling single/double quotes or backticks
+      const regex = new RegExp(`['"]?${key}['"]?\\s*:\\s*['"\`]([^'"\`]+)['"\`]`);
+      const match = trimmed.match(regex);
+      if (match && match[1]) {
+        config[key] = match[1];
+        matched = true;
       }
-      return null;
-    `);
-    const scope: any = {};
-    const result = fn.call(scope);
-    if (result && typeof result === 'object' && result.projectId) {
-      return result;
     }
+    // If we matched at least projectId and apiKey, we are good
+    if (matched && config.projectId && config.apiKey) {
+      return config;
+    }
+  } catch (err) {
+    console.warn('Regex fallback extraction failed:', err);
+  }
 
-    // 3. Try parsing as direct JS object literal
+  // 3. Try step-by-step eval function block with clean scopes to avoid redeclaration issues
+  try {
+    const cleanEval = new Function(`
+      return (function() {
+        try {
+          ${trimmed}
+          if (typeof firebaseConfig !== "undefined") return firebaseConfig;
+        } catch(e){}
+        try {
+          ${trimmed.replace(/^(const|let|var)\s+/gm, '')}
+          if (typeof firebaseConfig !== "undefined") return firebaseConfig;
+        } catch(e){}
+        return null;
+      })()
+    `);
+    const res = cleanEval();
+    if (res && typeof res === 'object' && res.projectId) {
+      return res;
+    }
+  } catch (e) {
+    // Fallback
+  }
+
+  try {
     const fnLiteral = new Function(`return (${trimmed});`);
     const literalResult = fnLiteral();
     if (literalResult && typeof literalResult === 'object' && literalResult.projectId) {
       return literalResult;
     }
-  } catch (err) {
-    console.log('Soft-skip: using alternative config mapping fallback.', err instanceof Error ? err.message : String(err));
+  } catch (e) {
+    // Fallback
   }
+
   return null;
 }
 
