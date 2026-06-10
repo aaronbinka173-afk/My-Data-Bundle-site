@@ -13,7 +13,7 @@ const createJsonResponse = (data: any, status = 200) => {
   });
 };
 
-window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+const mockFetchHandler = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
   const urlStr = typeof input === 'string' ? input : (input as any).url || input.toString();
   
   // If the path does not start with /api/, route using the default global fetch
@@ -449,3 +449,13 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
     return createJsonResponse({ error: 'Local offline simulation issue.' }, 500);
   }
 };
+
+try {
+  Object.defineProperty(window, 'fetch', {
+    value: mockFetchHandler,
+    configurable: true,
+    writable: true
+  });
+} catch (e) {
+  (window as any).fetch = mockFetchHandler;
+}
