@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import { 
   X, CreditCard, Smartphone, CheckCircle, RefreshCw, AlertCircle, Sparkles, Send
 } from 'lucide-react';
-import { createLocalOrder, getLocalSettings } from '../lib/localStore';
 
 interface CheckoutModalProps {
   bundle: any;
@@ -32,27 +31,33 @@ export default function CheckoutModal({ bundle, reseller, globalTax, onClose, on
 
     setStep('processing');
     setErrorMessage('');
-    setStatusPooling('Generating secure local transaction parameters...');
+    setStatusPooling('Generating payment parameters on Mac Data Hub servers...');
 
     try {
-      // Simulate slight network delay
-      setTimeout(() => {
-        const settings = getLocalSettings();
-        setCheckoutData({
-          reference: `GHS-MOCK-${Math.floor(Math.random() * 900000) + 100000}`,
-          amount: overallPriceGhs,
-          email: buyerEmail.trim() || 'customer@mac.com',
-          phone: buyerPhone.trim(),
-          payment_gateway: settings.payment_gateway || 'paystack',
-          test_mode: true,
-          meta: {
-            description: `Data bundle purchase for ${bundle.name}`
-          }
-        });
-        setStatusPooling('Awaiting sandbox payment checkout validation...');
-      }, 500);
+      const resp = await fetch('/api/checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          bundleId: bundle.id,
+          customerPhone: buyerPhone.trim(),
+          customerEmail: buyerEmail.trim() || undefined,
+          resellerId: reseller ? reseller.id : null,
+          paymentMethod,
+          network: paymentMethod === 'mobile_money' ? momoNetwork : undefined
+        })
+      });
+
+      const d = await resp.json();
+      if (!resp.ok) {
+        setErrorMessage(d.error || 'Checkout initiation was declined.');
+        setStep('details');
+        return;
+      }
+
+      setCheckoutData(d);
+      setStatusPooling('Awaiting payment verification token...');
     } catch (err) {
-      setErrorMessage('Communication block with local mock system.');
+      setErrorMessage('Communication block with checkout servers.');
       setStep('details');
     }
   };
@@ -66,54 +71,7 @@ export default function CheckoutModal({ bundle, reseller, globalTax, onClose, on
       s.async = true;
       document.body.appendChild(s);
     }
-    // Flutterwave CDN
-    if (!document.querySelector('script[src="https://checkout.flutterwave.com/v3.js"]')) {
-      const s = document.createElement('script');
-      s.src = 'https://checkout.flutterwave.com/v3.js';
-      s.async = true;
-      document.body.appendChild(s);
-    }
   }, []);
-
-  const startFlutterwavePayment = () => {
-    if (!checkoutData) return;
-    const FlutterwaveCheckout = (window as any).FlutterwaveCheckout;
-    if (!FlutterwaveCheckout) {
-      setErrorMessage("Flutterwave payment libraries are still loading... Try again in a brief second.");
-      return;
-    }
-
-    FlutterwaveCheckout({
-      public_key: checkoutData.meta.flw_pub_key,
-      tx_ref: checkoutData.reference,
-      amount: checkoutData.amount,
-      currency: "GHS",
-      payment_options: paymentMethod === 'mobile_money' ? "mobilemoneyghana" : "card",
-      customer: {
-        email: checkoutData.email,
-        phone_number: checkoutData.phone,
-      },
-      customizations: {
-        title: "Mac Data Hub Network",
-        description: checkoutData.meta.description || "Bundle dispatch services",
-        logo: "https://ai.studio/build/favicon.ico"
-      },
-      callback: async (data: any) => {
-        console.log("Flutterwave Inline Payment Finalized:", data);
-        if (data.status === "successful" || data.status === "completed") {
-          setStep('success');
-          onSuccess();
-        } else {
-          setErrorMessage("Transaction was declined by gateway: " + (data.charge_response_message || 'Declined'));
-          setStep('failed');
-        }
-      },
-      onclose: () => {
-        setErrorMessage("Payment interface dismissed. You can reopen or try again.");
-        setStep('details');
-      }
-    });
-  };
 
   const startPaystackPayment = () => {
     if (!checkoutData) return;
@@ -145,11 +103,7 @@ export default function CheckoutModal({ bundle, reseller, globalTax, onClose, on
 
   React.useEffect(() => {
     if (checkoutData && !checkoutData.test_mode) {
-      if (checkoutData.payment_gateway === 'flutterwave') {
-        setTimeout(() => startFlutterwavePayment(), 1000);
-      } else {
-        setTimeout(() => startPaystackPayment(), 1000);
-      }
+      setTimeout(() => startPaystackPayment(), 1000);
     }
   }, [checkoutData]);
 
@@ -159,35 +113,22 @@ export default function CheckoutModal({ bundle, reseller, globalTax, onClose, on
     
     setStatusPooling('Processing simulator checkout bypass keys...');
     try {
-      // Simulate receipt, markup, profit routing
-      const settings = getLocalSettings();
-      const markupGhs = reseller ? Math.max(0, bundle.final_price_ghs - bundle.admin_base_price_ghs) : 0;
-      const adminFeeGhs = Number(((bundle.admin_base_price_ghs * (settings.admin_fee_percent || 5)) / 100).toFixed(2));
-      const netToResellerGhs = reseller ? Number((markupGhs - adminFeeGhs).toFixed(2)) : 0;
-
-      createLocalOrder({
-        order_ref: checkoutData.reference,
-        customer_email: buyerEmail.trim() || 'customer@mac.com',
-        customer_phone: buyerPhone.trim(),
-        reseller_id: reseller ? reseller.id : null,
-        reseller_store_name: reseller ? reseller.store_name : '',
-        bundle_id: bundle.id,
-        bundle_name: bundle.name,
-        bundle_network: bundle.network,
-        bundle_data_amount: bundle.data_amount,
-        admin_base_price_ghs: bundle.admin_base_price_ghs,
-        reseller_markup_ghs: markupGhs,
-        final_price_ghs: overallPriceGhs,
-        admin_fee_ghs: adminFeeGhs,
-        net_to_reseller_ghs: netToResellerGhs,
-        delivery_status: 'delivered',
-        payment_status: 'paid'
+      const resp = await fetch('/api/checkout/mock-success', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reference: checkoutData.reference })
       });
 
-      setStep('success');
-      onSuccess();
-    } catch (e: any) {
-      setErrorMessage(e.message || 'Sandbox simulation failed.');
+      const d = await resp.json();
+      if (resp.ok) {
+        setStep('success');
+        onSuccess();
+      } else {
+        setErrorMessage(d.error || 'Sandbox simulation failed.');
+        setStep('failed');
+      }
+    } catch {
+      setErrorMessage('Connection failed during simulation verify.');
       setStep('failed');
     }
   };
@@ -436,14 +377,10 @@ export default function CheckoutModal({ bundle, reseller, globalTax, onClose, on
                   </p>
                   <button
                     onClick={() => {
-                      if (checkoutData.payment_gateway === 'flutterwave') {
-                        startFlutterwavePayment();
-                      } else {
-                        startPaystackPayment();
-                      }
+                      startPaystackPayment();
                     }}
                     type="button"
-                    className="w-full py-2.5 bg-amber-500 hover:bg-amber-650 text-slate-950 font-bold text-xs rounded-lg transition uppercase tracking-wider shadow-md shrink-0"
+                    className="w-full py-2.5 bg-amber-500 hover:bg-amber-655 text-slate-950 font-bold text-xs rounded-lg transition uppercase tracking-wider shadow-md shrink-0"
                   >
                     Open Payment Window
                   </button>

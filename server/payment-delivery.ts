@@ -258,7 +258,7 @@ export async function finalizePaidOrder(orderRef: string, transactionId: string,
   await db.createPaymentLog({
     order_id: order.id,
     transaction_ref: transactionId,
-    provider: orderRef.includes('FLW') ? 'flutterwave' : 'paystack',
+    provider: 'paystack',
     amount_ghs: Number(order.final_price_ghs) + Number(order.tax_fee_ghs || 0),
     customer_email: order.customer_email || 'guest@example.com',
     customer_phone: order.customer_phone,

@@ -772,11 +772,9 @@ export default function DashboardAdmin({ token, user, onLogout, onTypographyChan
         method: 'PUT',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          payment_gateway: settings.payment_gateway,
+          payment_gateway: 'paystack',
           paystack_public_key: settings.paystack_public_key,
           paystack_secret_key: settings.paystack_secret_key,
-          flutterwave_public_key: settings.flutterwave_public_key,
-          flutterwave_secret_key: settings.flutterwave_secret_key,
         })
       });
       if (res.ok) {
@@ -2631,7 +2629,7 @@ export default function DashboardAdmin({ token, user, onLogout, onTypographyChan
                     </span>
                     <h3 className="text-lg font-black text-slate-100 tracking-tight">Don't have API keys yet? Test instantly with Sandbox Mode!</h3>
                     <p className="text-slate-350 text-xs leading-relaxed max-w-3xl">
-                      We understand that getting real keys from <strong>Flutterwave, Paystack, mNotify, and SubAndGain</strong> can be tedious or confusing. 
+                      We understand that getting real keys from <strong>Paystack, mNotify, and SubAndGain</strong> can be tedious or confusing. 
                       You <strong>do not need them</strong> to test your platform! With our advanced simulated gateway environment:
                     </p>
                     <ul className="text-slate-400 text-xs list-disc pl-5 space-y-1 mt-1 font-sans">
@@ -2671,7 +2669,7 @@ export default function DashboardAdmin({ token, user, onLogout, onTypographyChan
                 <div>
                   <h4 className="font-semibold text-slate-200 flex items-center gap-1.5">
                     <LANDMARK_TAG className="text-amber-500 w-5 h-5" />
-                    Flutterwave & SubAndGain Test Simulator
+                    Paystack & SubAndGain Test Simulator
                   </h4>
                   <p className="text-slate-400 text-sm mt-1">
                     When active, customers bypass true cash charges/Momo triggers and simulate successful order processing instantly without credential setups.
@@ -3418,91 +3416,46 @@ export default function DashboardAdmin({ token, user, onLogout, onTypographyChan
                     Save Popup Settings
                   </button>
                 </form>
-
               </div>
 
               {/* Payment Gateways Config */}
               <div className="bg-slate-800/20 p-6 rounded-xl border border-slate-800 space-y-4">
                 <div>
-                  <h4 className="font-semibold text-slate-100">Configure Payment Gateways & Keys</h4>
-                  <p className="text-slate-400 text-xs mt-1">Specify whether you are accepting live customer payments via Flutterwave or Paystack and input your API keys. Make sure your webhook URL on Paystack/Flutterwave is set to: <code className="text-amber-400 font-mono text-[10px] bg-slate-950 p-1 rounded">https://YOUR_DOMAIN/api/webhook/YOUR_GATEWAY</code></p>
+                  <h4 className="font-semibold text-slate-100">Configure Paystack Payment Gateway & Keys</h4>
+                  <p className="text-slate-400 text-xs mt-1">Specify your live or test Paystack API keys to accept customer payments securely. Make sure your webhook URL on Paystack is set to: <code className="text-amber-400 font-mono text-[10px] bg-slate-950 p-1 rounded">https://YOUR_DOMAIN/api/webhook/paystack</code></p>
                 </div>
 
                 <form onSubmit={handleUpdateGatewaySettings} className="space-y-4">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <div className="space-y-3 bg-slate-900/30 p-4 rounded-lg border border-slate-850">
-                      <div className="flex justify-between items-center border-b border-slate-800 pb-2">
-                        <span className="font-bold text-slate-200 text-sm">Active Gateway</span>
-                        <div className="flex gap-2">
-                          {['paystack', 'flutterwave'].map(gw => (
-                            <button
-                              key={gw}
-                              type="button"
-                              onClick={() => setSettings({ ...settings, payment_gateway: gw as any })}
-                              className={`px-3 py-1 text-xxs font-bold uppercase rounded transition border ${
-                                settings.payment_gateway === gw
-                                  ? 'bg-amber-500 text-slate-950 border-amber-600'
-                                  : 'bg-slate-850 text-slate-400 border-slate-800 hover:text-white'
-                              }`}
-                            >
-                              {gw}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-
-                      <div className="space-y-3">
-                        <div>
-                          <label className="text-slate-450 text-[10px] block mb-1 font-mono uppercase">Paystack Public Key</label>
-                          <input
-                            type="text"
-                            required={settings.payment_gateway === 'paystack'}
-                            value={settings.paystack_public_key || ''}
-                            onChange={(e) => setSettings({ ...settings, paystack_public_key: e.target.value })}
-                            placeholder="pk_live_..."
-                            className="w-full bg-slate-900 border border-slate-700 focus:border-amber-500 p-2 text-xs font-mono text-slate-200 rounded focus:outline-none"
-                          />
-                        </div>
-                        <div>
-                          <label className="text-slate-450 text-[10px] block mb-1 font-mono uppercase">Paystack Secret Key</label>
-                          <input
-                            type="password"
-                            required={settings.payment_gateway === 'paystack'}
-                            value={settings.paystack_secret_key || ''}
-                            onChange={(e) => setSettings({ ...settings, paystack_secret_key: e.target.value })}
-                            placeholder="sk_live_..."
-                            className="w-full bg-slate-900 border border-slate-700 focus:border-amber-500 p-2 text-xs font-mono text-slate-205 rounded focus:outline-none"
-                          />
-                        </div>
-                      </div>
+                  <div className="bg-slate-900/30 p-5 rounded-lg border border-slate-850 space-y-4">
+                    <div className="flex justify-between items-center border-b border-slate-800 pb-2">
+                      <span className="font-bold text-slate-200 text-sm">Active Gateway</span>
+                      <span className="px-3 py-1 text-xxs font-bold uppercase rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                        PAYSTACK ONLY
+                      </span>
                     </div>
 
-                    <div className="space-y-3 bg-slate-900/30 p-4 rounded-lg border border-slate-850">
-                      <span className="font-bold text-slate-200 text-sm block border-b border-slate-800 pb-2">Flutterwave Credentials</span>
-                      
-                      <div className="space-y-3">
-                        <div>
-                          <label className="text-slate-450 text-[10px] block mb-1 font-mono uppercase">Flutterwave Public Key</label>
-                          <input
-                            type="text"
-                            required={settings.payment_gateway === 'flutterwave'}
-                            value={settings.flutterwave_public_key || ''}
-                            onChange={(e) => setSettings({ ...settings, flutterwave_public_key: e.target.value })}
-                            placeholder="FLWPUBK-..."
-                            className="w-full bg-slate-900 border border-slate-700 focus:border-amber-500 p-2 text-xs font-mono text-slate-205 rounded focus:outline-none"
-                          />
-                        </div>
-                        <div>
-                          <label className="text-slate-450 text-[10px] block mb-1 font-mono uppercase">Flutterwave Secret Key</label>
-                          <input
-                            type="password"
-                            required={settings.payment_gateway === 'flutterwave'}
-                            value={settings.flutterwave_secret_key || ''}
-                            onChange={(e) => setSettings({ ...settings, flutterwave_secret_key: e.target.value })}
-                            placeholder="FLWSECK-..."
-                            className="w-full bg-slate-900 border border-slate-700 focus:border-amber-500 p-2 text-xs font-mono text-slate-205 rounded focus:outline-none"
-                          />
-                        </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="text-slate-455 text-[10px] block mb-1 font-mono uppercase">Paystack Public Key</label>
+                        <input
+                          type="text"
+                          required
+                          value={settings.paystack_public_key || ''}
+                          onChange={(e) => setSettings({ ...settings, paystack_public_key: e.target.value })}
+                          placeholder="pk_live_..."
+                          className="w-full bg-slate-900 border border-slate-700 focus:border-amber-500 p-2 text-xs font-mono text-slate-200 rounded focus:outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-slate-455 text-[10px] block mb-1 font-mono uppercase">Paystack Secret Key</label>
+                        <input
+                          type="password"
+                          required
+                          value={settings.paystack_secret_key || ''}
+                          onChange={(e) => setSettings({ ...settings, paystack_secret_key: e.target.value })}
+                          placeholder="sk_live_..."
+                          className="w-full bg-slate-900 border border-slate-700 focus:border-amber-500 p-2 text-xs font-mono text-slate-200 rounded focus:outline-none"
+                        />
                       </div>
                     </div>
                   </div>

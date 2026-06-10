@@ -3,9 +3,6 @@ import {
   Lock, Mail, Eye, EyeOff, Store, Phone, Keyboard, AlertCircle, Sparkles, CheckSquare
 } from 'lucide-react';
 import { AdminSettings } from '../types';
-import { auth, db as firestoreDb } from '../lib/firebase';
-import { signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
-import { collection, query, where, getDocs, doc, setDoc } from 'firebase/firestore';
 
 interface AuthWindowProps {
   onAuthSuccess: (token: string, user: any) => void;
@@ -47,7 +44,24 @@ export default function AuthWindow({
   const [loading, setLoading] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string>('');
 
-  const adminPricePolicy = { fee: 0, enabled: false };
+  const [adminPricePolicy, setAdminPricePolicy] = useState<{ fee: number; enabled: boolean } | null>(null);
+
+  React.useEffect(() => {
+    fetch('/api/registration-fee')
+      .then(res => {
+        if (!res.ok) throw new Error('Failed to retrieve registration settings');
+        return res.json();
+      })
+      .then(data => {
+        setAdminPricePolicy({
+          fee: data.fee_ghs,
+          enabled: data.fee_enabled
+        });
+      })
+      .catch(() => {
+        setAdminPricePolicy({ fee: 50.00, enabled: true });
+      });
+  }, []);
 
   const handleSlugCalculation = (title: string) => {
     setStoreName(title);
@@ -61,91 +75,27 @@ export default function AuthWindow({
     setLoading(true);
 
     try {
-      if (mode === 'login') {
-        // 1. Authenticate with Firebase Auth Client SDK
-        const userCredential = await signInWithEmailAndPassword(auth, email, password);
-        const token = await userCredential.user.getIdToken();
+      const endpoint = mode === 'login' ? '/api/auth/login' : '/api/auth/register';
+      const body = mode === 'login' 
+        ? { email, password } 
+        : { email, password, role, storeName, storeSlug, phone };
 
-        // 2. Fetch User Profile from Firestore query
-        const userDocQuery = query(collection(firestoreDb, 'users'), where('email', '==', email.toLowerCase().trim()));
-        const userDocSnap = await getDocs(userDocQuery);
-        let userData: any = null;
+      const resp = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
 
-        if (!userDocSnap.empty) {
-          userData = userDocSnap.docs[0].data();
-        } else {
-          // Fallback user auto-creation (e.g., if created via Firebase Auth console or seed)
-          const roleToAssign = (email.toLowerCase().trim() === 'aaronbinka173@gmail.com') ? 'admin' : 'reseller';
-          const id = Math.floor(Math.random() * 900000) + 100000;
-          userData = {
-            id,
-            email: email.toLowerCase().trim(),
-            role: roleToAssign,
-            status: 'active',
-            store_name: roleToAssign === 'reseller' ? 'My Store' : null,
-            store_slug: roleToAssign === 'reseller' ? `store-${id}` : null,
-            phone: null,
-            registration_fee_paid_ghs: 0,
-            storefront_enabled: true,
-            created_at: new Date().toISOString()
-          };
-          await setDoc(doc(firestoreDb, 'users', String(id)), userData);
-          if (roleToAssign === 'reseller') {
-            await setDoc(doc(firestoreDb, 'reseller_accounts', String(id)), {
-              user_id: Number(id),
-              balance_ghs: 100.00,
-              total_earned_ghs: 0,
-              total_customers: 0,
-              deduction_source: 'storefront_earnings'
-            });
-          }
-        }
-
-        onAuthSuccess(token, userData);
-      } else {
-        // 1. Register with Firebase Auth Client SDK first
-        const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-        const token = await userCredential.user.getIdToken();
-
-        // 2. Create the user object inside Firestore
-        const id = Math.floor(Math.random() * 900000) + 100000;
-        const newUser = {
-          id: id,
-          email: email.toLowerCase().trim(),
-          role: role, // 'customer' or 'reseller'
-          status: 'active',
-          store_name: role === 'reseller' ? storeName : null,
-          store_slug: role === 'reseller' ? storeSlug : null,
-          phone: role === 'reseller' ? phone : null,
-          registration_fee_paid_ghs: 0,
-          storefront_enabled: true,
-          created_at: new Date().toISOString()
-        };
-        await setDoc(doc(firestoreDb, 'users', String(id)), newUser);
-
-        if (role === 'reseller') {
-          await setDoc(doc(firestoreDb, 'reseller_accounts', String(id)), {
-            user_id: Number(id),
-            balance_ghs: 100.00,
-            total_earned_ghs: 0,
-            total_customers: 0,
-            deduction_source: 'storefront_earnings'
-          });
-        }
-
-        onAuthSuccess(token, newUser);
+      const d = await resp.json();
+      if (!resp.ok) {
+        setErrorMessage(d.error || 'Authentication attempt failed.');
+        return;
       }
+
+      onAuthSuccess(d.token, d.user);
     } catch (err: any) {
       console.error(err);
-      let localMsg = err.message || 'Authentication attempt failed.';
-      if (err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {
-        localMsg = 'Invalid email address or password. Please try again.';
-      } else if (err.code === 'auth/email-already-in-use') {
-        localMsg = 'Email address already registered. Please login instead.';
-      } else if (err.code === 'auth/network-request-failed') {
-        localMsg = 'Network connection failed. Please check your internet connection.';
-      }
-      setErrorMessage(localMsg);
+      setErrorMessage('Communications failure. Make sure the server backend is running.');
     } finally {
       setLoading(false);
     }
@@ -168,18 +118,7 @@ export default function AuthWindow({
         </p>
       </div>
 
-      {mode === 'login' && (
-        <div className="bg-slate-950 border border-amber-800/40 p-3.5 rounded-xl text-xs space-y-1 text-center font-sans tracking-tight">
-          <div className="text-amber-400 font-semibold flex items-center justify-center gap-1.5 leading-none">
-            <Lock className="w-3.5 h-3.5" />
-            PRIMARY PLATFORM OWNER ACCREDITATION
-          </div>
-          <p className="text-slate-400 text-xs font-mono">
-            Username: <span className="text-slate-200">aaronbinka173@gmail.com</span><br />
-            Password: <span className="text-slate-200">admin123</span>
-          </p>
-        </div>
-      )}
+
 
       {errorMessage && (
         <div className="p-3 bg-rose-950/40 text-rose-300 border border-rose-800 font-sans text-xs rounded-lg flex items-start gap-2 leading-relaxed">

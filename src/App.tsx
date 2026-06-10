@@ -13,9 +13,7 @@ import AuthWindow from './components/AuthWindow';
 import CheckoutModal from './components/CheckoutModal';
 import DashboardAdmin from './components/DashboardAdmin';
 import DashboardReseller from './components/DashboardReseller';
-import { auth, db as firestoreDb } from './lib/firebase';
-import { collection, query, where, getDocs } from 'firebase/firestore';
-import { getLocalSettings, getLocalBundles, initLocalStore, getLocalReviews, addLocalReview, getLocalOrders } from './lib/localStore';
+import { auth } from './lib/firebase';
 
 const isVideoMedia = (src: string) => {
   if (!src) return false;
@@ -157,10 +155,11 @@ export default function App() {
   const [userSupportMsg, setUserSupportMsg] = useState<string>('');
   const [supportTyping, setSupportTyping] = useState<boolean>(false);
 
-  const fetchGlobalSettings = () => {
+  const fetchGlobalSettings = async () => {
     try {
-      initLocalStore();
-      const data = getLocalSettings();
+      const resp = await fetch('/api/registration-fee');
+      if (!resp.ok) throw new Error('Failed to retrieve settings');
+      const data = await resp.json();
       if (data.site_name) setSiteName(data.site_name);
       if (data.site_color) setSiteColor(data.site_color);
       if (data.global_font_style) setSiteFontFamily(data.global_font_style);
@@ -183,7 +182,7 @@ export default function App() {
       if (data.reviews_interval !== undefined) setReviewsInterval(Number(data.reviews_interval));
       if (data.tax) setGlobalTax(data.tax);
     } catch (err) {
-      console.error('Failed to load local settings:', err);
+      console.error('Failed to load settings from server:', err);
     }
   };
 
@@ -293,23 +292,7 @@ export default function App() {
     }
 
     if (localStorage.getItem('mac_hub_token')) {
-      // Fetch latest profile status (e.g., approved/suspended updates) from database
-      const stored = localStorage.getItem('mac_hub_user');
-      if (stored) {
-        try {
-          const u = JSON.parse(stored);
-          const q = query(collection(firestoreDb, 'users'), where('email', '==', u.email));
-          getDocs(q).then(snap => {
-            if (!snap.empty) {
-              const fresh = snap.docs[0].data();
-              localStorage.setItem('mac_hub_user', JSON.stringify(fresh));
-              setUser(fresh);
-            }
-          }).catch(err => console.error('Failed to auto refresh profile on mount locally:', err));
-        } catch {
-          // ignore error
-        }
-      }
+      refreshUserProfile();
     }
   }, []);
 
@@ -352,6 +335,43 @@ export default function App() {
   const triggerSupportAutoResponse = async (queryText: string) => {
     setSupportTyping(true);
 
+    try {
+      const mappedHistory = supportMessages.slice(-5).map(m => ({
+        role: m.sender === 'user' ? 'user' : 'model',
+        text: m.text
+      }));
+
+      const response = await fetch('/api/support/chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ 
+          message: queryText, 
+          history: mappedHistory,
+          isResellerStorefront: (view === 'store' && !!selectedResellerStore),
+          storeName: (view === 'store' && selectedResellerStore) ? selectedResellerStore.store_name : null,
+          userRole: user?.role || null
+        })
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data && data.reply) {
+          setSupportMessages(prev => [...prev, {
+            id: Date.now() + 1,
+            sender: 'care',
+            text: data.reply,
+            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          }]);
+          setSupportTyping(false);
+          return;
+        }
+      }
+    } catch (err) {
+      console.warn('Live automated desk offline, executing embedded client engine fallback.', err);
+    }
+
     // Embed client responses for instant support
     let replyText = "Thank you for reaching out! Your support ticket has been registered with our automated help desk. Our team is active—is there anything else about data packages, custom markups, or storefronts I can help explain?";
     const lQuery = queryText.toLowerCase();
@@ -361,7 +381,7 @@ export default function App() {
     } else if (lQuery.includes('failed') || lQuery.includes('not arrive') || lQuery.includes('refund') || lQuery.includes('receive')) {
       replyText = "If your order payment succeeded but you haven't received the data payload, our server automatically retries. If it fails, our administrator is alerted immediately to manually process or refund. Please verify your transaction reference in 'Verify My Orders' or click support directly.";
     } else if (lQuery.includes('payment') || lQuery.includes('pay') || lQuery.includes('gateway') || lQuery.includes('momo') || lQuery.includes('card')) {
-      replyText = "We accept MTN Mobile Money, Telecel Cash, AirtelTigo Money, and Visa/Mastercard. All checkouts are processed over secure Paystack and Flutterwave payments.";
+      replyText = "We accept MTN Mobile Money, Telecel Cash, AirtelTigo Money, and Visa/Mastercard. All checkouts are processed over secure Paystack payments.";
     } else if (lQuery.includes('network') || lQuery.includes('mtn') || lQuery.includes('telecel') || lQuery.includes('airtel') || lQuery.includes('glo')) {
       replyText = "We currently support high-speed MTN SME or Gifting bundles, Telecel (Vodafone) prepaid data lines, and standard AirtelTigo packages valid for 30 full days.";
     }
@@ -379,59 +399,32 @@ export default function App() {
 
   const fetchGeneralBundles = async () => {
     try {
-      setGeneralBundles(getLocalBundles());
+      const resp = await fetch('/api/bundles');
+      if (resp.ok) {
+        const d = await resp.json();
+        setGeneralBundles(d);
+      }
     } catch (e) {
-      console.error(e);
+      console.error('Failed to load active bundles:', e);
     }
   };
 
   const fetchStorefront = async (slug: string) => {
     try {
-      // Direct query to Firestore Users collection to find the storefront owner
-      const q = query(collection(firestoreDb, 'users'), where('store_slug', '==', slug));
-      const snap = await getDocs(q);
-      
-      if (!snap.empty) {
-        const u = snap.docs[0].data();
-        setSelectedResellerStore({
-          id: u.id,
-          store_name: u.store_name || 'My Store',
-          store_slug: u.store_slug || slug,
-          email: u.email,
-          phone: u.phone,
-          tax: u.tax || { enabled: false, percent: 0, flatGhs: 0 }
-        });
-
-        // Load general bundles and map markups or fallback addition
-        const baseBundles = getLocalBundles();
-        setStorefrontBundles(baseBundles.map(b => ({
-          ...b,
-          final_price_ghs: b.admin_base_price_ghs + 2.00
-        })));
-        setStorefrontReviews(getLocalReviews(u.id));
-      } else {
-        // Fallback or Admin catalog redirection
-        setView('home');
-        setStoreSlug(null);
-        fetchGeneralBundles();
-        fetchGlobalSettings();
+      const resp = await fetch(`/api/store/${slug}`);
+      if (!resp.ok) {
+        throw new Error('Storefront not loaded');
       }
+      const data = await resp.json();
+      setSelectedResellerStore(data.reseller);
+      setStorefrontBundles(data.bundles || []);
+      setStorefrontReviews(data.reviews || []);
     } catch (e) {
       console.error('Failed to load storefront directly:', e);
-      // Fail-safe default
-      setSelectedResellerStore({
-        id: 7,
-        store_name: 'Test Store',
-        store_slug: 'test-store',
-        status: 'active',
-        email: 'test@test.com'
-      });
-      const baseBundles = getLocalBundles();
-      setStorefrontBundles(baseBundles.map(b => ({
-        ...b,
-        final_price_ghs: b.admin_base_price_ghs + 4.00
-      })));
-      setStorefrontReviews(getLocalReviews(7));
+      setView('home');
+      setStoreSlug(null);
+      fetchGeneralBundles();
+      fetchGlobalSettings();
     }
   };
 
@@ -446,17 +439,26 @@ export default function App() {
     setReviewSuccessMsg('');
     setReviewErrorMsg('');
     try {
-      const addedReview = addLocalReview(
-        selectedResellerStore.id,
-        newReviewAuthor.trim(),
-        newReviewRating,
-        newReviewComment.trim()
-      );
-      setReviewSuccessMsg(`Thank you! Your 5-star rating and feedback for "${selectedResellerStore.store_name}" has been recorded.`);
+      const resp = await fetch(`/api/store/${selectedResellerStore.id}/reviews`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          author_name: newReviewAuthor.trim(),
+          rating: newReviewRating,
+          comment: newReviewComment.trim()
+        })
+      });
+      const d = await resp.json();
+      if (!resp.ok) {
+        throw new Error(d.error || 'Review save issue.');
+      }
+      setReviewSuccessMsg(`Thank you! Your feedback for "${selectedResellerStore.store_name}" has been recorded.`);
       setNewReviewAuthor('');
       setNewReviewComment('');
       setNewReviewRating(5);
-      setStorefrontReviews(prev => [addedReview, ...prev]);
+      setStorefrontReviews(prev => [d.review, ...prev]);
     } catch (err: any) {
       setReviewErrorMsg(err.message || 'Review record processing issue.');
     } finally {
@@ -493,7 +495,8 @@ export default function App() {
     localStorage.setItem('mac_hub_history_phone', pastOrdersPhone.trim());
 
     try {
-      const list = getLocalOrders();
+      const stored = localStorage.getItem('mac_hub_orders');
+      const list = stored ? JSON.parse(stored) : [];
       const customerList = list.filter((o: any) => o.customer_phone === pastOrdersPhone.trim());
       setCustomerOrderLogs(customerList);
     } catch (err) {
@@ -526,26 +529,21 @@ export default function App() {
     const activeToken = token || localStorage.getItem('mac_hub_token');
     if (!activeToken) return null;
     try {
-      const currentUser = auth.currentUser;
-      if (currentUser && currentUser.email) {
-        const q = query(collection(firestoreDb, 'users'), where('email', '==', currentUser.email));
-        const snap = await getDocs(q);
-        if (!snap.empty) {
-          const u = snap.docs[0].data();
-          localStorage.setItem('mac_hub_user', JSON.stringify(u));
-          setUser(u);
-          return u;
+      const resp = await fetch('/api/auth/me', {
+        headers: {
+          'Authorization': `Bearer ${activeToken}`
+        }
+      });
+      if (resp.ok) {
+        const d = await resp.json();
+        if (d.user) {
+          localStorage.setItem('mac_hub_user', JSON.stringify(d.user));
+          setUser(d.user);
+          return d.user;
         }
       }
-
-      const stored = localStorage.getItem('mac_hub_user');
-      if (stored) {
-        const u = JSON.parse(stored);
-        setUser(u);
-        return u;
-      }
     } catch (err) {
-      console.error('Failed to auto refresh user profile locally:', err);
+      console.error('Failed to auto refresh user profile:', err);
     }
     return null;
   };
@@ -1320,8 +1318,13 @@ export default function App() {
                         <button
                           onClick={async () => {
                             try {
-                              const settings = getLocalSettings();
-                              handleStartRegFeeCheckout(settings.registration_fee_ghs || 50, user.id, user.email);
+                              const r = await fetch('/api/registration-fee');
+                              if (r.ok) {
+                                const d = await r.json();
+                                handleStartRegFeeCheckout(d.fee_ghs || 50, user.id, user.email);
+                              } else {
+                                handleStartRegFeeCheckout(50, user.id, user.email);
+                              }
                             } catch (e) {
                               handleStartRegFeeCheckout(50, user.id, user.email);
                             }

@@ -64,7 +64,7 @@ export interface PaymentLog {
   id: number;
   order_id: number;
   transaction_ref: string;
-  provider: 'flutterwave' | 'paystack';
+  provider: 'paystack';
   amount_ghs: number;
   customer_email: string;
   customer_phone: string;
@@ -120,11 +120,9 @@ export interface AdminSettings {
   admin_fee_source: 'earnings_deduction' | 'order_margin'; // how admin fee flows
   test_mode_enabled: boolean;
   withdrawal_fee_percent?: number;
-  payment_gateway?: 'flutterwave' | 'paystack';
+  payment_gateway?: 'paystack';
   paystack_public_key?: string;
   paystack_secret_key?: string;
-  flutterwave_public_key?: string;
-  flutterwave_secret_key?: string;
   data_api_username?: string;
   data_api_key?: string;
   data_api_url?: string;

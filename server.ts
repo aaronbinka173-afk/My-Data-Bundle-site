@@ -694,7 +694,7 @@ app.post('/api/checkout', async (req: Request, res: Response) => {
       }
 
       const regFee = settings.registration_fee_ghs;
-      const orderRef = `REG-FLW-${user.id}-${Math.floor(Math.random() * 900000 + 100000)}`;
+      const orderRef = `REG-PSTK-${user.id}-${Math.floor(Math.random() * 900000 + 100000)}`;
 
       return res.json({
         checkout_needed: true,
@@ -705,12 +705,11 @@ app.post('/api/checkout', async (req: Request, res: Response) => {
         payment_method: paymentMethod,
         is_registration: true,
         test_mode: settings.test_mode_enabled,
-        payment_gateway: settings.payment_gateway || 'paystack',
+        payment_gateway: 'paystack',
         meta: {
           title: 'Reseller Storefront Registration',
           description: `Mac Data Hub registration fee for ${user.email}`,
           currency: 'GHS',
-          flw_pub_key: settings.flutterwave_public_key || process.env.FLUTTERWAVE_PUBLIC_KEY || 'FLWPUBK_TEST-MOCK_KEY',
           paystack_pub_key: settings.paystack_public_key || process.env.PAYSTACK_PUBLIC_KEY || 'pk_test_mock_key'
         }
       });
@@ -829,12 +828,11 @@ app.post('/api/checkout', async (req: Request, res: Response) => {
       payment_method: paymentMethod,
       is_registration: false,
       test_mode: settings.test_mode_enabled,
-      payment_gateway: settings.payment_gateway || 'paystack',
+      payment_gateway: 'paystack',
       meta: {
         title: bundle.name,
         description: `Delivering ${bundle.data_amount} to ${customerPhone}`,
         currency: 'GHS',
-        flw_pub_key: settings.flutterwave_public_key || process.env.FLUTTERWAVE_PUBLIC_KEY || 'FLWPUBK_TEST-MOCK_KEY',
         paystack_pub_key: settings.paystack_public_key || process.env.PAYSTACK_PUBLIC_KEY || 'pk_test_mock_key'
       }
     });
@@ -1685,8 +1683,6 @@ app.post('/api/admin/settings/preload-sandbox', verifyToken(['admin']), async (r
     await db.updateSetting('payment_gateway', 'paystack');
     await db.updateSetting('paystack_public_key', 'pk_test_mac_data_hub_demo_sandbox_888');
     await db.updateSetting('paystack_secret_key', 'sk_test_mac_data_hub_demo_sandbox_888');
-    await db.updateSetting('flutterwave_public_key', 'FLWPUBK_test_mac_data_hub_demo_sandbox_888');
-    await db.updateSetting('flutterwave_secret_key', 'FLWSECK_test_mac_data_hub_demo_sandbox_888');
     await db.updateSetting('data_api_username', 'mac_data_hub_vtu25');
     await db.updateSetting('data_api_key', 'mock_api_key_sandbox_demo');
     await db.updateSetting('data_api_url', 'https://subandgain.com/api/data.php');
@@ -1717,12 +1713,10 @@ app.post('/api/admin/settings/reset-database', verifyToken(['admin']), async (re
 
 app.put('/api/admin/settings/gateway', verifyToken(['admin']), async (req: AuthRequest, res: Response) => {
   try {
-    const { payment_gateway, paystack_public_key, paystack_secret_key, flutterwave_public_key, flutterwave_secret_key } = req.body;
-    if (payment_gateway) await db.updateSetting('payment_gateway', String(payment_gateway));
+    const { paystack_public_key, paystack_secret_key } = req.body;
+    await db.updateSetting('payment_gateway', 'paystack');
     if (paystack_public_key !== undefined) await db.updateSetting('paystack_public_key', String(paystack_public_key));
     if (paystack_secret_key !== undefined) await db.updateSetting('paystack_secret_key', String(paystack_secret_key));
-    if (flutterwave_public_key !== undefined) await db.updateSetting('flutterwave_public_key', String(flutterwave_public_key));
-    if (flutterwave_secret_key !== undefined) await db.updateSetting('flutterwave_secret_key', String(flutterwave_secret_key));
     return res.json({ success: true, message: 'Payment gateway credentials and keys stored successfully.' });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
@@ -2306,27 +2300,6 @@ app.get('/api/reseller/withdrawals', verifyToken(['reseller']), async (req: Auth
 // ==========================================
 // 6. REAL WEBHOOK PROCESSING
 // ==========================================
-
-// Flutterwave Webhook
-app.post('/api/webhook/flutterwave', async (req: Request, res: Response) => {
-  try {
-    const hash = req.headers['verif-hash'];
-    const flw_secret = process.env.FLUTTERWAVE_SECRET_KEY;
-
-    // Optional verification verification (if verif-hash matches configured FLW hook secret)
-    console.log('Incoming Flutterwave Webhook:', req.body);
-
-    const { txRef, status, id, amount } = req.body || {};
-    if (status === 'successful' && txRef) {
-      await finalizePaidOrder(txRef, `FLW-TX-${id || Date.now()}`, req.body);
-    }
-
-    return res.status(200).send('Webhook Received');
-  } catch (err: any) {
-    console.error('Flutterwave Webhook Settle error:', err);
-    return res.status(500).send('Error');
-  }
-});
 
 // Paystack Webhook
 app.post('/api/webhook/paystack', async (req: Request, res: Response) => {
