@@ -92,6 +92,9 @@ if (process.env.FIREBASE_CONFIG) {
 
 if (!firebaseConfig) {
   firebaseConfig = firebaseConfigDoc;
+} else if (firebaseConfigDoc && firebaseConfigDoc.firestoreDatabaseId && !firebaseConfig.firestoreDatabaseId) {
+  // Always copy firestoreDatabaseId if it exists in the fallback applet config to prevent defaulting to (default)
+  firebaseConfig.firestoreDatabaseId = firebaseConfigDoc.firestoreDatabaseId;
 }
 
 if (firebaseConfig) {
