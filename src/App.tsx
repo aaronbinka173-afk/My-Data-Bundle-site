@@ -157,7 +157,7 @@ export default function App() {
 
   const fetchGlobalSettings = async () => {
     try {
-      const resp = await fetch('/api/registration-fee');
+      const resp = await fetch(`/api/registration-fee?t=${Date.now()}`);
       if (!resp.ok) throw new Error('Failed to retrieve settings');
       const data = await resp.json();
       if (data.site_name) setSiteName(data.site_name);
@@ -1318,7 +1318,7 @@ export default function App() {
                         <button
                           onClick={async () => {
                             try {
-                              const r = await fetch('/api/registration-fee');
+                              const r = await fetch(`/api/registration-fee?t=${Date.now()}`);
                               if (r.ok) {
                                 const d = await r.json();
                                 handleStartRegFeeCheckout(d.fee_ghs || 50, user.id, user.email);

@@ -1918,7 +1918,9 @@ export const db = {
 
   // --- ADMIN SETTINGS ---
   async getSettings(): Promise<any> {
-    if ((global as any).isCached && (global as any).cachedAdminSettings) {
+    const now = Date.now();
+    const lastFetch = (global as any).lastSettingsFetchTime || 0;
+    if ((global as any).cachedAdminSettings && (now - lastFetch < 2000)) {
       return (global as any).cachedAdminSettings;
     }
     const fetchFresh = async () => {
@@ -2069,13 +2071,13 @@ export const db = {
     };
     const settingsResult = await fetchFresh();
     (global as any).cachedAdminSettings = settingsResult;
-    (global as any).isCached = true;
+    (global as any).lastSettingsFetchTime = Date.now();
     return settingsResult;
   },
 
   async updateSetting(key: string, value: string): Promise<boolean> {
     (global as any).cachedAdminSettings = null;
-    (global as any).isCached = false;
+    (global as any).lastSettingsFetchTime = 0;
     if (isFirestore) return firebaseDb.updateSetting(key, value);
     if (isPg && pool) {
       const check = await pool.query("SELECT id FROM admin_settings WHERE setting_key = $1", [key]);

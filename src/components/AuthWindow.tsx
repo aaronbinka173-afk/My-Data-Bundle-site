@@ -47,7 +47,7 @@ export default function AuthWindow({
   const [adminPricePolicy, setAdminPricePolicy] = useState<{ fee: number; enabled: boolean } | null>(null);
 
   React.useEffect(() => {
-    fetch('/api/registration-fee')
+    fetch(`/api/registration-fee?t=${Date.now()}`)
       .then(res => {
         if (!res.ok) throw new Error('Failed to retrieve registration settings');
         return res.json();
