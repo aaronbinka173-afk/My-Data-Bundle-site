@@ -484,7 +484,7 @@ app.get('/api/registration-fee', async (req: Request, res: Response) => {
     return res.json({
       fee_enabled: settings.registration_fee_enabled,
       fee_ghs: settings.registration_fee_ghs,
-      site_name: settings.site_name || 'Mac Data Hub',
+      site_name: (settings.site_name && !settings.site_name.includes('ACCREDITATION') && !settings.site_name.includes('admin123')) ? settings.site_name : 'Mac Data Hub',
       site_color: settings.site_color || 'amber',
       global_font_style: settings.global_font_style || 'Outfit',
       global_font_size: settings.global_font_size || '16px',

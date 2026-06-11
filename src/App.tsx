@@ -160,7 +160,13 @@ export default function App() {
       const resp = await fetch(`/api/registration-fee?t=${Date.now()}`);
       if (!resp.ok) throw new Error('Failed to retrieve settings');
       const data = await resp.json();
-      if (data.site_name) setSiteName(data.site_name);
+      if (data.site_name) {
+        let name = data.site_name;
+        if (name.includes('ACCREDITATION') || name.includes('admin123')) {
+          name = 'Mac Data Hub';
+        }
+        setSiteName(name);
+      }
       if (data.site_color) setSiteColor(data.site_color);
       if (data.global_font_style) setSiteFontFamily(data.global_font_style);
       if (data.global_font_size) setSiteFontSize(data.global_font_size);
@@ -736,7 +742,7 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="max-w-sm lg:max-w-none lg:w-[400px] bg-slate-950 rounded-2xl p-6 border border-slate-800 flex flex-col gap-4 shadow-2xl relative z-10 shrink-0">
+                <div className="w-full max-w-sm lg:max-w-none lg:w-[400px] bg-slate-950 rounded-2xl p-6 border border-slate-800 flex flex-col gap-4 shadow-2xl relative z-10 shrink-0">
                   <div className="text-center font-bold text-slate-300 border-b border-slate-850 pb-3 uppercase tracking-wide text-xs">How it Works</div>
                   <div className="space-y-4 text-xs text-slate-400">
                     <div className="flex gap-3">
