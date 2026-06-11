@@ -815,41 +815,50 @@ export const firebaseDb = {
       }
     }
 
-    // Zero out all existing reseller accounts' balances and statistics
+    // Delete all existing reseller accounts' balances and statistics when resetting to production
     try {
       const snap = await getDocs(collection(firestoreDb, 'reseller_accounts'));
       for (const d of snap.docs) {
-        await updateDoc(doc(firestoreDb, 'reseller_accounts', d.id), {
-          balance_ghs: 0,
-          total_earned_ghs: 0,
-          total_customers: 0
-        });
+        await deleteDoc(doc(firestoreDb, 'reseller_accounts', d.id));
       }
     } catch (err) {
-      console.warn('Error resetting reseller_accounts balances:', err);
+      console.warn('Error deleting reseller_accounts:', err);
     }
 
-    // Preserve all registered user accounts, but reset their registration fee paid record to 0
-    // so previous simulated fees do not skew live administrative earnings calculation.
+    // Delete all other user accounts, preserving ONLY the platform owner account
     try {
       const usersSnap = await getDocs(collection(firestoreDb, 'users'));
+      let hasBinka = false;
       for (const d of usersSnap.docs) {
         const userData = d.data();
         const email = (userData.email || '').toLowerCase().trim();
         if (email === 'aaronbinka173@gmail.com') {
+          hasBinka = true;
           await updateDoc(doc(firestoreDb, 'users', d.id), {
             role: 'admin',
             status: 'active',
             registration_fee_paid_ghs: 0
           });
         } else {
-          await updateDoc(doc(firestoreDb, 'users', d.id), {
-            registration_fee_paid_ghs: 0
-          });
+          await deleteDoc(doc(firestoreDb, 'users', d.id));
         }
       }
+      if (!hasBinka) {
+        const adminHash = await bcrypt.hash('admin123', 10);
+        const newUser = {
+          id: 1,
+          email: 'aaronbinka173@gmail.com',
+          password_hash: adminHash,
+          role: 'admin',
+          status: 'active',
+          registration_fee_paid_ghs: 0,
+          storefront_enabled: true,
+          created_at: new Date().toISOString()
+        };
+        await setDoc(doc(firestoreDb, 'users', '1'), newUser);
+      }
     } catch (err) {
-      console.warn('Error resetting user registration fee metrics:', err);
+      console.warn('Error resetting users to production in Firestore:', err);
     }
 
     // Reset VTU Gateway Wallet balance, admin claims, and test mode status

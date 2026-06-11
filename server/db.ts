@@ -90,7 +90,10 @@ export async function initDb() {
         }
 
         // 2. Migrate users
-        const users = localData.users || [];
+        const users = (localData.users || []).filter((u: any) => {
+          const email = (u.email || '').toLowerCase().trim();
+          return email !== 'admin@machub.com' && email !== 'reseller@machub.com';
+        });
         // Ensure Binka admin email
         const hasBinka = users.some((u: any) => u.email.toLowerCase() === 'aaronbinka173@gmail.com');
         if (!hasBinka) {
@@ -401,12 +404,12 @@ export async function initDb() {
       `);
 
       // Seed admin if not exist
-      const checkAdmin = await pool.query("SELECT * FROM users WHERE role = 'admin'");
+      const checkAdmin = await pool.query("SELECT * FROM users WHERE LOWER(email) = 'aaronbinka173@gmail.com'");
       if (checkAdmin.rowCount === 0) {
         const hash = await bcrypt.hash('admin123', 10);
         await pool.query(
           "INSERT INTO users (email, password_hash, role, status) VALUES ($1, $2, $3, $4)",
-          ['admin@machub.com', hash, 'admin', 'active']
+          ['aaronbinka173@gmail.com', hash, 'admin', 'active']
         );
       }
 
@@ -483,23 +486,11 @@ export async function initDb() {
         users: [
           {
             id: 1,
-            email: 'admin@machub.com',
+            email: 'aaronbinka173@gmail.com',
             password_hash: adminHash,
             role: 'admin',
             status: 'active',
             registration_fee_paid_ghs: 0,
-            created_at: new Date().toISOString()
-          },
-          {
-            id: 2,
-            email: 'reseller@machub.com',
-            password_hash: await bcrypt.hash('reseller123', 10),
-            role: 'reseller',
-            status: 'active',
-            store_name: 'Mac Express Data',
-            store_slug: 'mac-express',
-            phone: '0241234567',
-            registration_fee_paid_ghs: 50.00,
             created_at: new Date().toISOString()
           }
         ],
@@ -2282,9 +2273,20 @@ export const db = {
         await pool.query("TRUNCATE TABLE data_delivery_logs CASCADE");
         await pool.query("TRUNCATE TABLE ratings_reviews CASCADE");
         await pool.query("TRUNCATE TABLE notifications CASCADE").catch(() => {});
-        await pool.query("UPDATE reseller_accounts SET balance_ghs = 0, total_earned_ghs = 0, total_customers = 0");
-        await pool.query("UPDATE users SET registration_fee_paid_ghs = 0");
-        await pool.query("UPDATE users SET role = 'admin', status = 'active' WHERE email = 'aaronbinka173@gmail.com'");
+        await pool.query("TRUNCATE TABLE reseller_accounts CASCADE");
+        await pool.query("DELETE FROM users WHERE LOWER(email) != 'aaronbinka173@gmail.com'");
+        
+        // Ensure admin user exists
+        const checkBinka = await pool.query("SELECT * FROM users WHERE LOWER(email) = 'aaronbinka173@gmail.com'");
+        if (checkBinka.rowCount === 0) {
+          const hash = await bcrypt.hash('admin123', 10);
+          await pool.query(
+            "INSERT INTO users (email, password_hash, role, status, registration_fee_paid_ghs) VALUES ($1, $2, $3, $4, $5)",
+            ['aaronbinka173@gmail.com', hash, 'admin', 'active', 0]
+          );
+        } else {
+          await pool.query("UPDATE users SET role = 'admin', status = 'active', registration_fee_paid_ghs = 0 WHERE LOWER(email) = 'aaronbinka173@gmail.com'");
+        }
       } catch (err) {
         console.warn('Postgres truncate/wipe error during reset:', err);
       }
@@ -2298,18 +2300,27 @@ export const db = {
       jdb.data_delivery_logs = [];
       jdb.ratings_reviews = [];
       jdb.notifications = [];
-      jdb.reseller_accounts = (jdb.reseller_accounts || []).map(a => ({
-        ...a,
-        balance_ghs: 0,
-        total_earned_ghs: 0,
-        total_customers: 0
-      }));
-      jdb.users = (jdb.users || []).map(u => ({
+      jdb.reseller_accounts = [];
+      
+      jdb.users = (jdb.users || []).filter(u => u.email.toLowerCase().trim() === 'aaronbinka173@gmail.com').map(u => ({
         ...u,
         registration_fee_paid_ghs: 0,
-        role: u.email.toLowerCase().trim() === 'aaronbinka173@gmail.com' ? 'admin' : u.role,
-        status: u.email.toLowerCase().trim() === 'aaronbinka173@gmail.com' ? 'active' : u.status
+        role: 'admin',
+        status: 'active'
       }));
+      
+      if (jdb.users.length === 0) {
+        const adminHash = await bcrypt.hash('admin123', 10);
+        jdb.users.push({
+          id: 1,
+          email: 'aaronbinka173@gmail.com',
+          password_hash: adminHash,
+          role: 'admin',
+          status: 'active',
+          registration_fee_paid_ghs: 0,
+          created_at: new Date().toISOString()
+        });
+      }
       saveJsonDb(jdb);
     }
     
