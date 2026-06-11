@@ -196,6 +196,7 @@ export default function AuthWindow({
               required
               placeholder="name@example.com"
               value={email}
+              autoComplete="username"
               onChange={(e) => setEmail(e.target.value)}
               className="w-full bg-slate-800 border border-slate-700 rounded-lg p-2.5 pl-10 focus:outline-none focus:border-amber-500 text-slate-200"
             />
@@ -212,6 +213,7 @@ export default function AuthWindow({
               required
               placeholder="••••••••"
               value={password}
+              autoComplete="current-password"
               onChange={(e) => setPassword(e.target.value)}
               className="w-full bg-slate-800 border border-slate-700 rounded-lg p-2.5 pl-10 pr-10 focus:outline-none focus:border-amber-500 text-slate-200"
             />

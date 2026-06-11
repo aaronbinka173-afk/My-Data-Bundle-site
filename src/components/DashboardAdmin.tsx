@@ -224,9 +224,9 @@ export default function DashboardAdmin({ token, user, onLogout, onTypographyChan
       await fetchNotifications();
 
       // Always fetch stats and settings to support real-time global low API wallet balance alerts
-      const r1 = await fetch('/api/admin/dashboard', { headers });
+      const r1 = await fetch(`/api/admin/dashboard?t=${Date.now()}`, { headers });
       if (r1.ok) setStats(await r1.json());
-      const r7 = await fetch('/api/admin/settings', { headers });
+      const r7 = await fetch(`/api/admin/settings?t=${Date.now()}`, { headers });
       if (r7.ok) setSettings(await r7.json());
 
       if (activeTab === 'bundles') {

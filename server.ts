@@ -479,6 +479,7 @@ app.get('/api/bundles', async (req: Request, res: Response) => {
 // Get registration fee configurations publicly
 app.get('/api/registration-fee', async (req: Request, res: Response) => {
   try {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
     const settings = await db.getSettings();
     return res.json({
       fee_enabled: settings.registration_fee_enabled,
@@ -885,6 +886,7 @@ app.post('/api/checkout/mock-success', async (req: Request, res: Response) => {
 // Dashboard analytics
 app.get('/api/admin/dashboard', verifyToken(['admin']), async (req: AuthRequest, res: Response) => {
   try {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
     const resellers = await db.getUsers('reseller');
     const customers = await db.getUsers('customer');
     const orders = await db.getOrders();
@@ -1529,6 +1531,7 @@ app.post('/api/admin/delivery-logs/:id/retry', verifyToken(['admin']), async (re
 
 app.get('/api/admin/settings', verifyToken(['admin']), async (req: AuthRequest, res: Response) => {
   try {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
     const settings = await db.getSettings();
     return res.json(settings);
   } catch (err: any) {
