@@ -40,7 +40,7 @@ interface JsonDatabase {
 }
 
 let pool: Pool | null = null;
-const isPg = !!process.env.DATABASE_URL;
+const isPg = !!process.env.DATABASE_URL && (process.env.DATABASE_URL.startsWith('postgresql://') || process.env.DATABASE_URL.startsWith('postgres://'));
 
 if (isPg) {
   pool = new Pool({

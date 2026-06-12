@@ -99,7 +99,9 @@ if (!firebaseConfig) {
   firebaseConfig.firestoreDatabaseId = firebaseConfigDoc.firestoreDatabaseId;
 }
 
-if (firebaseConfig && !process.env.DATABASE_URL) {
+const isPgUrl = !!process.env.DATABASE_URL && (process.env.DATABASE_URL.startsWith('postgresql://') || process.env.DATABASE_URL.startsWith('postgres://'));
+
+if (firebaseConfig && !isPgUrl) {
   try {
     firebaseApp = initializeApp(firebaseConfig);
     auth = getAuth(firebaseApp);
@@ -111,7 +113,7 @@ if (firebaseConfig && !process.env.DATABASE_URL) {
   } catch (err) {
     console.error('Failed to initialize Firebase in server/firebaseDb.ts:', err);
   }
-} else if (process.env.DATABASE_URL) {
+} else if (isPgUrl) {
   console.log('PostgreSQL database (DATABASE_URL) detected. Firestore is explicitly disabled in firebaseDb.ts.');
   isFirestore = false;
 }
