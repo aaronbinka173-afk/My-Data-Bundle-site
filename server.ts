@@ -13,7 +13,7 @@ import { deliverDataBundle, finalizePaidOrder } from './server/payment-delivery'
 import { sendRealSms, sendRealEmail } from './server/notification';
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'mac-data-hub-sec-key-1337-ghana';
 
 // Lazy initializer for Gemini client to prevent crashing on boot if no API Key is present.
@@ -2407,16 +2407,9 @@ async function startServer() {
     });
   }
 
-  // Support standard numeric ports, or named pipes for tools like Passenger in Namecheap cPanel
-  if (typeof PORT === 'string' && (PORT.startsWith('\\\\') || isNaN(Number(PORT)))) {
-    app.listen(PORT, () => {
-      console.log(`[Mac Data Hub] backend running inside Passenger pipe: ${PORT}`);
-    });
-  } else {
-    app.listen(Number(PORT), '0.0.0.0', () => {
-      console.log(`[Mac Data Hub] backend running at http://0.0.0.0:${PORT} in ${process.env.NODE_ENV || 'development'}`);
-    });
-  }
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`[Mac Data Hub] backend running at http://0.0.0.0:${PORT} in ${process.env.NODE_ENV || 'development'}`);
+  });
 }
 
 startServer();
