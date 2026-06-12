@@ -1741,31 +1741,7 @@ app.put('/api/admin/settings/data-api', verifyToken(['admin']), async (req: Auth
 
 app.put('/api/admin/settings/notifications', verifyToken(['admin']), async (req: AuthRequest, res: Response) => {
   try {
-    const { 
-      mnotify_api_key, 
-      arkesel_api_key, 
-      sms_sender_id, 
-      smtp_host, 
-      smtp_port, 
-      smtp_user, 
-      smtp_pass, 
-      smtp_from, 
-      smtp_from_name,
-      smtp_secure
-    } = req.body;
-
-    if (mnotify_api_key !== undefined) await db.updateSetting('mnotify_api_key', String(mnotify_api_key));
-    if (arkesel_api_key !== undefined) await db.updateSetting('arkesel_api_key', String(arkesel_api_key));
-    if (sms_sender_id !== undefined) await db.updateSetting('sms_sender_id', String(sms_sender_id));
-    if (smtp_host !== undefined) await db.updateSetting('smtp_host', String(smtp_host));
-    if (smtp_port !== undefined) await db.updateSetting('smtp_port', String(smtp_port));
-    if (smtp_user !== undefined) await db.updateSetting('smtp_user', String(smtp_user));
-    if (smtp_pass !== undefined) await db.updateSetting('smtp_pass', String(smtp_pass));
-    if (smtp_from !== undefined) await db.updateSetting('smtp_from', String(smtp_from));
-    if (smtp_from_name !== undefined) await db.updateSetting('smtp_from_name', String(smtp_from_name));
-    if (smtp_secure !== undefined) await db.updateSetting('smtp_secure', String(smtp_secure));
-
-    return res.json({ success: true, message: 'All notification (Email/SMS) API credentials and Sender IDs configured successfully.' });
+    return res.status(403).json({ error: 'Outbound carrier SMS and outbound SMTP email gateways (no-reply channels) are deactivated and removed from this platform completely.' });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
