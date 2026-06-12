@@ -2383,9 +2383,13 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`[Mac Data Hub] backend running at http://0.0.0.0:${PORT} in ${process.env.NODE_ENV || 'development'}`);
-  });
+  if (!process.env.VERCEL) {
+    app.listen(PORT, '0.0.0.0', () => {
+      console.log(`[Mac Data Hub] backend running at http://0.0.0.0:${PORT} in ${process.env.NODE_ENV || 'development'}`);
+    });
+  } else {
+    console.log('[Mac Data Hub] Running in Vercel Serverless environment. Express listener skipped.');
+  }
 }
 
 startServer();
