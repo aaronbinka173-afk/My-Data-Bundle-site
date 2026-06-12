@@ -13,7 +13,7 @@ import { deliverDataBundle, finalizePaidOrder } from './server/payment-delivery'
 import { sendRealSms, sendRealEmail } from './server/notification';
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'mac-data-hub-sec-key-1337-ghana';
 
 // Lazy initializer for Gemini client to prevent crashing on boot if no API Key is present.
@@ -2080,6 +2080,22 @@ app.post('/api/admin/subandgain/import', verifyToken(['admin']), async (req: Aut
 // 5. RESELLER PROTECTED CAPABILITIES
 // ==========================================
 
+// Reseller Settings metadata (markup ceilings, withdrawal fees, taxes)
+app.get('/api/reseller/settings', verifyToken(['reseller', 'admin']), async (req: AuthRequest, res: Response) => {
+  try {
+    const settings = await db.getSettings();
+    return res.json({
+      max_markup_percent: Number(settings.max_markup_percent) || 50,
+      withdrawal_fee_percent: Number(settings.withdrawal_fee_percent) || 0,
+      admin_fee_percent: Number(settings.admin_fee_percent) || 0,
+      registration_fee_enabled: settings.registration_fee_enabled === true || String(settings.registration_fee_enabled) === 'true',
+      registration_fee_ghs: Number(settings.registration_fee_ghs) || 0,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // Reseller Dashboard analytics
 app.get('/api/reseller/dashboard', verifyToken(['reseller']), async (req: AuthRequest, res: Response) => {
   try {
@@ -2391,9 +2407,16 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`[Mac Data Hub] backend running at http://0.0.0.0:${PORT} in ${process.env.NODE_ENV || 'development'}`);
-  });
+  // Support standard numeric ports, or named pipes for tools like Passenger in Namecheap cPanel
+  if (typeof PORT === 'string' && (PORT.startsWith('\\\\') || isNaN(Number(PORT)))) {
+    app.listen(PORT, () => {
+      console.log(`[Mac Data Hub] backend running inside Passenger pipe: ${PORT}`);
+    });
+  } else {
+    app.listen(Number(PORT), '0.0.0.0', () => {
+      console.log(`[Mac Data Hub] backend running at http://0.0.0.0:${PORT} in ${process.env.NODE_ENV || 'development'}`);
+    });
+  }
 }
 
 startServer();

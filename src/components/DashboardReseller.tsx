@@ -104,9 +104,9 @@ export default function DashboardReseller({ token, user, onLogout }: DashboardRe
       // Load alerts
       await fetchNotifications();
 
-      // Fetch public/admin settings to get ceiling validation info
+      // Fetch reseller-specific configurations to get ceiling validation and withdrawal fee info securely
       const setR = await fetch('/api/bundles'); // get active bundles for comparison
-      const setG = await fetch('/api/admin/settings', { headers }); // might trigger 403 if not admin, but backend handles it or we map average defaults
+      const setG = await fetch('/api/reseller/settings', { headers }); 
       let maxMarkupPercentage = 50;
       if (setG.ok) {
         const sData = await setG.json();

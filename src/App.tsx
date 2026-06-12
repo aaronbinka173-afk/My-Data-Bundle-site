@@ -103,6 +103,7 @@ export default function App() {
   const [reviewsDisplayDuration, setReviewsDisplayDuration] = useState<number>(5);
   const [reviewsInterval, setReviewsInterval] = useState<number>(20);
   const [activeReviewPopup, setActiveReviewPopup] = useState<any | null>(null);
+  const [statusCheckMsg, setStatusCheckMsg] = useState<{ text: string; type: 'success' | 'info' | 'danger' } | null>(null);
 
   useEffect(() => {
     if (!reviewsPopupEnabled) {
@@ -527,8 +528,10 @@ export default function App() {
 
   const handleRegFeeSuccess = () => {
     setRegFeePaymentDetails(null);
-    // Alert success and redirect to login
-    alert('Payment confirmed successfully! Your reseller storefront account is now pending administrative review and approval. Once reviewed, you will have immediate dashboard access!');
+    setStatusCheckMsg({
+      text: 'Payment confirmed successfully! Your reseller storefront account is now pending administrative review and approval. Once reviewed, you will have immediate dashboard access!',
+      type: 'success'
+    });
   };
 
   const refreshUserProfile = async () => {
@@ -1289,6 +1292,24 @@ export default function App() {
                   </p>
                 </div>
 
+                {statusCheckMsg && (
+                  <div className={`p-4 rounded-xl text-sm border font-sans flex items-start gap-2.5 shadow-md ${
+                    statusCheckMsg.type === 'success' 
+                      ? 'bg-emerald-950/45 border-emerald-500/25 text-emerald-400' 
+                      : statusCheckMsg.type === 'danger'
+                        ? 'bg-rose-950/45 border-rose-500/25 text-rose-400'
+                        : 'bg-blue-950/45 border-blue-500/25 text-blue-400'
+                  }`}>
+                    <ShieldCheck className="w-5 h-5 shrink-0 mt-0.5 text-current" />
+                    <div className="flex-grow text-xs leading-relaxed">
+                      {statusCheckMsg.text}
+                    </div>
+                    <button onClick={() => setStatusCheckMsg(null)} className="text-slate-400 hover:text-slate-200 transition-colors pointer-events-auto">
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                )}
+
                 {/* Progress Steps UI */}
                 <div className="space-y-6">
                   {/* Step 1: Account Generated */}
@@ -1383,9 +1404,15 @@ export default function App() {
                     onClick={async () => {
                       const updatedUser = await refreshUserProfile();
                       if (updatedUser && updatedUser.status === 'active') {
-                        alert('Congratulations! Your reseller account has been approved and activated. Launching your workspace!');
+                        setStatusCheckMsg({
+                          text: 'Congratulations! Your reseller account has been approved and activated. Launching your workspace...',
+                          type: 'success'
+                        });
                       } else {
-                        alert('Status Refreshed: Your account is still undergoing administrative clearance. Thank you for your patience!');
+                        setStatusCheckMsg({
+                          text: 'Status Refreshed: Your account is still undergoing administrative clearance. Thank you for your patience!',
+                          type: 'info'
+                        });
                       }
                     }}
                     className="flex items-center gap-1.5 px-4 py-2 bg-slate-800 hover:bg-slate-750 text-slate-200 border border-slate-700 font-mono font-bold text-xs rounded transition-colors"
