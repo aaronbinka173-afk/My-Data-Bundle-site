@@ -99,7 +99,7 @@ if (!firebaseConfig) {
   firebaseConfig.firestoreDatabaseId = firebaseConfigDoc.firestoreDatabaseId;
 }
 
-if (firebaseConfig) {
+if (firebaseConfig && !process.env.DATABASE_URL) {
   try {
     firebaseApp = initializeApp(firebaseConfig);
     auth = getAuth(firebaseApp);
@@ -111,6 +111,9 @@ if (firebaseConfig) {
   } catch (err) {
     console.error('Failed to initialize Firebase in server/firebaseDb.ts:', err);
   }
+} else if (process.env.DATABASE_URL) {
+  console.log('PostgreSQL database (DATABASE_URL) detected. Firestore is explicitly disabled in firebaseDb.ts.');
+  isFirestore = false;
 }
 
 // Auto-increment sequence emulator for Firestore
