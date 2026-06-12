@@ -63,7 +63,7 @@ export default function DashboardReseller({ token, user, onLogout }: DashboardRe
         setNotifications(data);
       }
     } catch (e) {
-      console.warn("Failed to retrieve reseller alerts:", e);
+      console.log("Failed to retrieve reseller alerts (network or server spinup transient failure):", e);
     }
   };
 

@@ -376,7 +376,7 @@ export default function App() {
         }
       }
     } catch (err) {
-      console.warn('Live automated desk offline, executing embedded client engine fallback.', err);
+      console.log('Live automated desk offline, executing embedded client engine fallback.', err);
     }
 
     // Embed client responses for instant support

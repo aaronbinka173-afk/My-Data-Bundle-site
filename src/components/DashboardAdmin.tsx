@@ -181,7 +181,7 @@ export default function DashboardAdmin({ token, user, onLogout, onTypographyChan
         setNotifications(data);
       }
     } catch (e) {
-      console.warn("Failed to retrieve system alerts:", e);
+      console.log("Failed to retrieve system alerts (network or server spinup transient failure):", e);
     }
   };
 
@@ -1728,8 +1728,8 @@ export default function DashboardAdmin({ token, user, onLogout, onTypographyChan
                   </div>
                 </div>
 
-                <div className="h-72 w-full text-slate-300 pt-2" id="vtu-sales-recharts-container">
-                  <ResponsiveContainer width="100%" height="100%">
+                <div className="relative h-72 w-full text-slate-300 pt-2" id="vtu-sales-recharts-container">
+                  <ResponsiveContainer width="99%" height="100%" minWidth={0}>
                     <BarChart
                       data={stats.daily_revenue_trends || []}
                       margin={{ top: 10, right: 10, left: -10, bottom: 0 }}
